@@ -1,0 +1,12 @@
+# App runtime needs only the first six.
+pandas
+numpy
+scikit-learn
+plotly
+streamlit
+networkx
+# Used only at data-generation time (src/data_generator.py) and for README assets.
+# The Streamlit app reads CSVs and does NOT import these.
+catboost
+shap
+matplotlib

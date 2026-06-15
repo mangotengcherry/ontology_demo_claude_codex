@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.streamlit/secrets.toml
+# agent behavioral-guideline file, not part of the demo deliverable
+claude.md
+# CatBoost training-log artifact (created at data-generation time)
+catboost_info/

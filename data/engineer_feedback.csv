@@ -1,0 +1,4 @@
+hypothesis_id,engineer_judgment,action_type,action_status,outcome,note
+HYP_001,타당(plausible),FDC_check,done,CVD_CH_03 압력 센서 드리프트 확인,PM 주기 초과 구간과 일치
+HYP_001,추가검증(needs_validation),recipe_review,in_progress,PPID_77A 교란 여부 분리 필요,제품 PRODA 편중 의심
+HYP_002,보류(hold),metro_recheck,planned,-,edge 두께는 증상으로 판단

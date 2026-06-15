@@ -1,0 +1,12 @@
+# 이 파일을 편집해 도메인 인과관계를 추가/수정한다 (ontology market)
+source_feature,target_feature,relation,confidence
+fdc_cvd_pressure_slope_p95,metro_thk_edge_wl128,physicallyAffects,0.85
+fdc_cvd_pressure_slope_p95,metro_thk_edge_wl160,physicallyAffects,0.8
+fdc_cvd_rf_power_std,metro_thk_edge_wl160,physicallyAffects,0.6
+metro_thk_edge_wl128,defect_rate,mediates,0.8
+metro_thk_edge_wl160,defect_rate,mediates,0.75
+metro_cd_center_wl160,defect_rate,mediates,0.4
+queue_time_before_etch,defect_rate,triggers,0.4
+prev_defect_count_after_metro,defect_rate,proxyOf,0.7
+recipe_ppid_77a_flag,fdc_cvd_pressure_slope_p95,propagatesTo,0.5
+final_eds_proxy_leakage_feature,defect_rate,proxyOf,0.95
