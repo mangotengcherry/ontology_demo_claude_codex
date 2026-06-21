@@ -17,6 +17,7 @@ class VirtualModeTests(unittest.TestCase):
             raw = pd.read_csv(os.path.join(tmp, "raw_data.csv"))
             shap = pd.read_csv(os.path.join(tmp, "x_feature_shap_value.csv"))
             relation = pd.read_csv(os.path.join(tmp, "prc_metro_relation.csv"))
+            bad_wafers = pd.read_csv(os.path.join(tmp, "bad_wafers.csv"))
 
             self.assertIn("root_lot_id", raw.columns)
             self.assertIn("wafer_id", raw.columns)
@@ -28,6 +29,8 @@ class VirtualModeTests(unittest.TestCase):
                 list(relation.columns),
                 ["prc_step", "metro_step", "metro_item", "subitem_id", "metro_grade"],
             )
+            self.assertEqual(list(bad_wafers.columns), ["root_lot_id", "wafer_id"])
+            self.assertGreater(len(bad_wafers), 0)
 
     def test_run_demo_virtual_mode_generates_inputs_and_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -56,6 +59,7 @@ class VirtualModeTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(os.path.exists(os.path.join(input_dir, "raw_data.csv")))
+            self.assertTrue(os.path.exists(os.path.join(input_dir, "bad_wafers.csv")))
             self.assertTrue(os.path.exists(os.path.join(output_dir, "hypothesis_cards.csv")))
             self.assertTrue(os.path.exists(os.path.join(output_dir, "report.md")))
             self.assertIn("ONTOLOGY-SHAP VIRTUAL DATASET RUN", result.stdout)

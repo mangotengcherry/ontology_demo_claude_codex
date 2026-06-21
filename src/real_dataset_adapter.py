@@ -13,6 +13,7 @@ COHORT_ID = "__BAD_WAFER_COHORT__"
 RAW_DATA_FILE = "raw_data.csv"
 SHAP_FILE = "x_feature_shap_value.csv"
 RELATION_FILE = "prc_metro_relation.csv"
+BAD_WAFERS_FILE = "bad_wafers.csv"
 ID_COLUMNS = ["root_lot_id", "wafer_id"]
 RAW_NON_FEATURE_COLUMNS = {"root_lot_id", "wafer_id", "tkout_time", "target"}
 
@@ -49,7 +50,8 @@ def build_standard_dataset(
 
     feature_cols = [c for c in raw.columns if c not in RAW_NON_FEATURE_COLUMNS]
     feature_matrix = raw[ID_COLUMNS + feature_cols].copy()
-    target = _build_target(raw, bad_quantile)
+    bad_wafers = _read_optional_bad_wafers(input_dir)
+    target = _build_target(raw, bad_quantile, bad_wafers=bad_wafers)
     feature_ids = _ordered_union(feature_cols, shap_input["feature"].astype(str).tolist())
     feature_dictionary = _build_feature_dictionary(feature_ids, relation)
     shap_values = _build_feature_level_shap(shap_input, raw, target)
@@ -118,15 +120,49 @@ def _normalize_relation(relation: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _build_target(raw: pd.DataFrame, bad_quantile: float) -> pd.DataFrame:
+def _read_optional_bad_wafers(input_dir: str) -> pd.DataFrame | None:
+    path = os.path.join(input_dir, BAD_WAFERS_FILE)
+    if not os.path.exists(path):
+        return None
+    return pd.read_csv(path)
+
+
+def _build_target(raw: pd.DataFrame, bad_quantile: float, bad_wafers: pd.DataFrame | None = None) -> pd.DataFrame:
     target = raw[["root_lot_id", "wafer_id", "target"]].copy()
     target = target.rename(columns={"target": TARGET_ID})
     y = pd.to_numeric(target[TARGET_ID], errors="coerce")
     if y.isna().all():
         raise ValueError("raw_data.csv target column must contain numeric values.")
-    threshold = y.quantile(bad_quantile)
-    target["bad_flag"] = (y >= threshold).astype(int)
+    if bad_wafers is not None:
+        bad_keys = _bad_wafer_keys(bad_wafers)
+        raw_keys = _combined_keys(target)
+        missing = sorted(bad_keys - set(raw_keys))
+        if missing:
+            sample = ", ".join(missing[:5])
+            raise ValueError(
+                f"{BAD_WAFERS_FILE} contains wafer IDs not present in raw_data.csv: {sample}"
+            )
+        target["bad_flag"] = raw_keys.isin(bad_keys).astype(int)
+    else:
+        threshold = y.quantile(bad_quantile)
+        target["bad_flag"] = (y >= threshold).astype(int)
     return target
+
+
+def _bad_wafer_keys(bad_wafers: pd.DataFrame) -> set[str]:
+    if {"root_lot_id", "wafer_id"}.issubset(bad_wafers.columns):
+        normalized = bad_wafers[["root_lot_id", "wafer_id"]].dropna().astype(str)
+        return set(_combined_keys(normalized))
+    if "root_lot_wafer_id" in bad_wafers.columns:
+        return set(bad_wafers["root_lot_wafer_id"].dropna().astype(str))
+    raise ValueError(
+        f"{BAD_WAFERS_FILE} must contain either root_lot_id, wafer_id columns "
+        "or a root_lot_wafer_id column using 'root_lot_id|wafer_id'."
+    )
+
+
+def _combined_keys(df: pd.DataFrame) -> pd.Series:
+    return df["root_lot_id"].astype(str) + "|" + df["wafer_id"].astype(str)
 
 
 def _ordered_union(first: Iterable[str], second: Iterable[str]) -> List[str]:

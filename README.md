@@ -7,7 +7,7 @@ bad wafer 기준 평균 SHAP 결과를 공정 ontology와 연결해 root-cause c
 | 모드 | 목적 | 입력 |
 |---|---|---|
 | `virtual` | 평가/시연용 가상 데이터 생성 후 분석 | 없음. `input/*.csv`를 자동 생성 |
-| `real` | 회사 데이터 분석 | `input/raw_data.csv`, `input/x_feature_shap_value.csv`, `input/prc_metro_relation.csv` |
+| `real` | 회사 데이터 분석 | `input/raw_data.csv`, `input/x_feature_shap_value.csv`, `input/prc_metro_relation.csv`, optional `input/bad_wafers.csv` |
 | `auto` | 기본값 | `input/`에 실제 입력 3개가 있으면 `real`, 없으면 `virtual` |
 
 ## 빠른 실행
@@ -20,7 +20,7 @@ pip install -r requirements.txt
 # 평가용 가상 데이터 생성 + 분석
 python3 run_demo.py --mode virtual
 
-# 실제 데이터 분석
+# 실제 데이터 분석. bad_wafers.csv가 있으면 bad wafer list를 우선 사용합니다.
 python3 run_demo.py --mode real --input-dir input --bad-quantile 0.80
 
 # 대시보드 확인
@@ -36,6 +36,9 @@ streamlit run app.py
 | `raw_data.csv` | `root_lot_id`, `wafer_id`, `tkout_time`, `target`, feature columns | wafer별 원천 데이터 |
 | `x_feature_shap_value.csv` | `feature`, `shap_value` | bad wafer만 대상으로 계산한 feature별 평균 SHAP |
 | `prc_metro_relation.csv` | `prc_step`, `metro_step`, `metro_item`, `subitem_id`, `metro_grade` | 공정 step과 metro feature의 관계 seed |
+| `bad_wafers.csv` | `root_lot_id`, `wafer_id` 또는 `root_lot_wafer_id` | 선택 입력. SHAP mean 계산에 사용한 bad wafer cohort |
+
+`bad_wafers.csv`가 있으면 이 리스트로 `bad_flag`를 생성합니다. 없을 때만 `--bad-quantile` 기준으로 `target` 상위 wafer를 fallback bad wafer로 잡습니다. `root_lot_wafer_id` 단일 컬럼을 사용할 경우 값은 `root_lot_id|wafer_id` 형식이어야 합니다.
 
 ```text
 cat|ppid|공정step

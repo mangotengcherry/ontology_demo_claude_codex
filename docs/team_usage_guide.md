@@ -28,6 +28,7 @@ python3 run_demo.py --mode virtual
 input/raw_data.csv
 input/x_feature_shap_value.csv
 input/prc_metro_relation.csv
+input/bad_wafers.csv
 ```
 
 이 모드는 팀원 온보딩, 실행 환경 점검, report 형식 검토에 사용합니다.
@@ -40,7 +41,7 @@ input/prc_metro_relation.csv
 python3 run_demo.py --mode real --input-dir input --bad-quantile 0.80
 ```
 
-`--bad-quantile 0.80`은 `target` 상위 20%를 bad wafer로 정의한다는 뜻입니다. 이미 SHAP은 bad wafer만 대상으로 계산된 평균값이어야 합니다.
+실제 데이터에서 SHAP mean을 계산한 bad wafer 목록을 알고 있다면 `input/bad_wafers.csv`를 함께 넣는 것을 권장합니다. 이 파일이 있으면 `--bad-quantile`은 사용되지 않고, 입력 리스트 기준으로 `bad_flag`가 생성됩니다. `--bad-quantile 0.80`은 `bad_wafers.csv`가 없을 때만 `target` 상위 20%를 fallback bad wafer로 잡는 옵션입니다.
 
 ### Auto mode
 
@@ -61,6 +62,12 @@ python3 run_demo.py
 input/raw_data.csv
 input/x_feature_shap_value.csv
 input/prc_metro_relation.csv
+```
+
+가능하면 SHAP mean 계산에 사용한 bad wafer cohort도 같이 넣습니다.
+
+```text
+input/bad_wafers.csv
 ```
 
 3. 실행합니다.
@@ -118,6 +125,30 @@ feature, shap_value
 - `shap_value`는 bad wafer만 대상으로 계산한 feature별 평균 SHAP입니다.
 - wafer별 SHAP이 아니므로 대시보드의 SHAP view는 선택 wafer가 아니라 bad wafer cohort 기준 ranking으로 표시됩니다.
 - `feature` 값은 `raw_data.csv`의 feature column 이름과 일치해야 합니다.
+
+### bad_wafers.csv
+
+선택 입력이지만 실제 데이터 분석에서는 사용하는 것을 권장합니다. 이 파일은 `x_feature_shap_value.csv`의 SHAP mean을 계산할 때 사용한 bad wafer cohort와 동일해야 합니다.
+
+지원 형식 1:
+
+```text
+root_lot_id, wafer_id
+```
+
+지원 형식 2:
+
+```text
+root_lot_wafer_id
+```
+
+`root_lot_wafer_id` 값은 아래처럼 `|` delimiter를 사용합니다.
+
+```text
+LOT123|W05
+```
+
+`bad_wafers.csv`에 있는 wafer가 `raw_data.csv`에 없으면 실행을 중단합니다. 이는 SHAP mean cohort와 raw data cohort가 어긋난 상태를 조용히 통과시키지 않기 위한 검증입니다.
 
 ### prc_metro_relation.csv
 

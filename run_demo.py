@@ -90,7 +90,10 @@ def _print_virtual_summary(virtual_summary: dict, result: dict, input_dir: str, 
     print("ONTOLOGY-SHAP VIRTUAL DATASET RUN")
     print("=" * 78)
     print(f"virtual input files               : {input_dir}/")
-    print(f"virtual wafers / features         : {virtual_summary['n_wafers']} / {virtual_summary['n_features']}")
+    print(
+        f"virtual wafers / bad wafers / features: "
+        f"{virtual_summary['n_wafers']} / {virtual_summary['n_bad_wafers']} / {virtual_summary['n_features']}"
+    )
     print(f"standard artifacts                : {data_dir}/")
     print(f"naive top-SHAP (excl. leakage)    : {summary['naive_top_nonleak']} [{summary['naive_top_nonleak_role']}]")
     print(f"ontology-traced root candidate    : {summary['ontology_root'] or '미상'}")

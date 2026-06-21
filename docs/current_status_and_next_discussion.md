@@ -42,13 +42,15 @@ streamlit run app.py
 input/raw_data.csv
 input/x_feature_shap_value.csv
 input/prc_metro_relation.csv
+input/bad_wafers.csv  # optional but recommended for real data
 ```
 
 전제:
 
 - `x_feature_shap_value.csv`의 `shap_value`는 bad wafer를 대상으로 계산한 feature별 평균 SHAP입니다.
 - wafer별 SHAP이 아니므로 현재 분석은 bad wafer cohort-level SHAP ranking 중심입니다.
-- `raw_data.csv`는 bad wafer 정의, feature value anomaly, recurrence, chamber/PPID context 보강에 사용됩니다.
+- `bad_wafers.csv`가 있으면 이 리스트로 `bad_flag`를 생성합니다. 없을 때만 `--bad-quantile`로 fallback bad wafer를 잡습니다.
+- `raw_data.csv`는 target 값, feature value anomaly, recurrence, chamber/PPID context 보강에 사용됩니다.
 
 ### 주요 모듈
 
@@ -110,9 +112,10 @@ ontology-traced root candidate:
 
 - `raw_data.csv`에 `root_lot_id`, `wafer_id`, `tkout_time`, `target`이 있는지
 - `x_feature_shap_value.csv`의 `feature`가 `raw_data.csv` feature column과 얼마나 매칭되는지
+- `bad_wafers.csv`가 있다면 SHAP mean 계산 cohort와 동일한지
 - `prc_metro_relation.csv`의 `metro_step`, `metro_item`, `subitem_id`가 실제 metro feature naming과 일치하는지
 - target 방향이 “클수록 나쁨”인지 확인
-- `--bad-quantile` 값이 실제 bad wafer 정의와 맞는지 확인
+- `bad_wafers.csv`가 없다면 `--bad-quantile` 값이 fallback bad wafer 정의로 적절한지 확인
 
 ### 첫 실행 후 확인할 산출물
 
@@ -286,7 +289,7 @@ action 후보:
 ## 7. 다음 회의에서 결정하면 좋은 질문
 
 1. 실제 `target`은 클수록 bad가 맞는가?
-2. bad wafer 정의는 quantile로 충분한가, 아니면 bin/spec 기반으로 해야 하는가?
+2. SHAP mean 계산에 사용한 bad wafer list를 항상 받을 수 있는가?
 3. 실제 feature naming rule에서 예외 패턴이 얼마나 있는가?
 4. `product`, `route`는 raw_data feature column에 들어오는가, 별도 metadata로 들어오는가?
 5. `prc_metro_relation.csv`는 공정팀이 관리할 수 있는가?
@@ -298,7 +301,7 @@ action 후보:
 
 내일 실제 데이터 적용 후에는 아래 순서가 좋습니다.
 
-1. `python3 run_demo.py --mode real --input-dir input --bad-quantile 0.80` 실행
+1. `input/bad_wafers.csv`를 준비한 뒤 `python3 run_demo.py --mode real --input-dir input --bad-quantile 0.80` 실행
 2. `outputs/report.md`에서 unknown/leakage/mediator/root 분류 품질 확인
 3. feature 매칭 실패 목록과 relation 매칭 실패 목록을 수동 점검
 4. 실제 공정적으로 말이 되는 hypothesis가 나오는지 리뷰

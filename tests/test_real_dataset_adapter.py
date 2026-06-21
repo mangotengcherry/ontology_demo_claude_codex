@@ -16,83 +16,86 @@ CHAMBER_FEATURE = "cat|eqp_ch|PRC1"
 
 
 class RealDatasetAdapterTests(unittest.TestCase):
+    def _write_base_inputs(self, input_dir):
+        raw = pd.DataFrame(
+            [
+                {
+                    "root_lot_id": "L1",
+                    "wafer_id": "W1",
+                    "tkout_time": "2026-05-01 08:00:00",
+                    "target": 1.0,
+                    PPID_FEATURE: "P_A",
+                    EQP_FEATURE: "EQ_A",
+                    CHAMBER_FEATURE: "CH_A",
+                    ROOT_FEATURE: 0.1,
+                    METRO_FEATURE: 10.0,
+                    VM_FEATURE: 2.0,
+                },
+                {
+                    "root_lot_id": "L1",
+                    "wafer_id": "W2",
+                    "tkout_time": "2026-05-01 08:10:00",
+                    "target": 2.0,
+                    PPID_FEATURE: "P_A",
+                    EQP_FEATURE: "EQ_A",
+                    CHAMBER_FEATURE: "CH_A",
+                    ROOT_FEATURE: 0.2,
+                    METRO_FEATURE: 11.0,
+                    VM_FEATURE: 2.5,
+                },
+                {
+                    "root_lot_id": "L2",
+                    "wafer_id": "W3",
+                    "tkout_time": "2026-05-01 08:20:00",
+                    "target": 3.0,
+                    PPID_FEATURE: "P_B",
+                    EQP_FEATURE: "EQ_B",
+                    CHAMBER_FEATURE: "CH_B",
+                    ROOT_FEATURE: 0.3,
+                    METRO_FEATURE: 12.0,
+                    VM_FEATURE: 3.0,
+                },
+                {
+                    "root_lot_id": "L2",
+                    "wafer_id": "W4",
+                    "tkout_time": "2026-05-01 08:30:00",
+                    "target": 9.0,
+                    PPID_FEATURE: "P_B",
+                    EQP_FEATURE: "EQ_B",
+                    CHAMBER_FEATURE: "CH_B",
+                    ROOT_FEATURE: 2.0,
+                    METRO_FEATURE: 20.0,
+                    VM_FEATURE: 5.0,
+                },
+            ]
+        )
+        raw.to_csv(os.path.join(input_dir, "raw_data.csv"), index=False)
+        pd.DataFrame(
+            [
+                {"feature": METRO_FEATURE, "shap_value": 0.8},
+                {"feature": ROOT_FEATURE, "shap_value": 0.3},
+                {"feature": PPID_FEATURE, "shap_value": 0.1},
+            ]
+        ).to_csv(os.path.join(input_dir, "x_feature_shap_value.csv"), index=False)
+        pd.DataFrame(
+            [
+                {
+                    "prc_step": "PRC1",
+                    "metro_step": "MET1",
+                    "metro_item": "CD1",
+                    "subitem_id": "AVG",
+                    "metro_grade": "A",
+                }
+            ]
+        ).to_csv(os.path.join(input_dir, "prc_metro_relation.csv"), index=False)
+
     def test_builds_standard_dataset_from_bad_wafer_mean_shap_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_dir = os.path.join(tmp, "input")
             output_dir = os.path.join(tmp, "data")
             os.makedirs(input_dir)
 
-            raw = pd.DataFrame(
-                [
-                    {
-                        "root_lot_id": "L1",
-                        "wafer_id": "W1",
-                        "tkout_time": "2026-05-01 08:00:00",
-                        "target": 1.0,
-                        PPID_FEATURE: "P_A",
-                        EQP_FEATURE: "EQ_A",
-                        CHAMBER_FEATURE: "CH_A",
-                        ROOT_FEATURE: 0.1,
-                        METRO_FEATURE: 10.0,
-                        VM_FEATURE: 2.0,
-                    },
-                    {
-                        "root_lot_id": "L1",
-                        "wafer_id": "W2",
-                        "tkout_time": "2026-05-01 08:10:00",
-                        "target": 2.0,
-                        PPID_FEATURE: "P_A",
-                        EQP_FEATURE: "EQ_A",
-                        CHAMBER_FEATURE: "CH_A",
-                        ROOT_FEATURE: 0.2,
-                        METRO_FEATURE: 11.0,
-                        VM_FEATURE: 2.5,
-                    },
-                    {
-                        "root_lot_id": "L2",
-                        "wafer_id": "W3",
-                        "tkout_time": "2026-05-01 08:20:00",
-                        "target": 3.0,
-                        PPID_FEATURE: "P_B",
-                        EQP_FEATURE: "EQ_B",
-                        CHAMBER_FEATURE: "CH_B",
-                        ROOT_FEATURE: 0.3,
-                        METRO_FEATURE: 12.0,
-                        VM_FEATURE: 3.0,
-                    },
-                    {
-                        "root_lot_id": "L2",
-                        "wafer_id": "W4",
-                        "tkout_time": "2026-05-01 08:30:00",
-                        "target": 9.0,
-                        PPID_FEATURE: "P_B",
-                        EQP_FEATURE: "EQ_B",
-                        CHAMBER_FEATURE: "CH_B",
-                        ROOT_FEATURE: 2.0,
-                        METRO_FEATURE: 20.0,
-                        VM_FEATURE: 5.0,
-                    },
-                ]
-            )
-            raw.to_csv(os.path.join(input_dir, "raw_data.csv"), index=False)
-            pd.DataFrame(
-                [
-                    {"feature": METRO_FEATURE, "shap_value": 0.8},
-                    {"feature": ROOT_FEATURE, "shap_value": 0.3},
-                    {"feature": PPID_FEATURE, "shap_value": 0.1},
-                ]
-            ).to_csv(os.path.join(input_dir, "x_feature_shap_value.csv"), index=False)
-            pd.DataFrame(
-                [
-                    {
-                        "prc_step": "PRC1",
-                        "metro_step": "MET1",
-                        "metro_item": "CD1",
-                        "subitem_id": "AVG",
-                        "metro_grade": "A",
-                    }
-                ]
-            ).to_csv(os.path.join(input_dir, "prc_metro_relation.csv"), index=False)
+            self._write_base_inputs(input_dir)
 
             artifacts = build_standard_dataset(input_dir, output_dir, bad_quantile=0.75)
 
@@ -123,6 +126,57 @@ class RealDatasetAdapterTests(unittest.TestCase):
             w4_history = history[history["wafer_id"] == "W4"].iloc[0]
             self.assertEqual(w4_history["ppid"], "P_B")
             self.assertEqual(w4_history["chamber_id"], "CH_B")
+
+    def test_bad_wafers_csv_overrides_quantile_bad_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = os.path.join(tmp, "input")
+            output_dir = os.path.join(tmp, "data")
+            os.makedirs(input_dir)
+            self._write_base_inputs(input_dir)
+            pd.DataFrame(
+                [
+                    {"root_lot_id": "L1", "wafer_id": "W1"},
+                    {"root_lot_id": "L2", "wafer_id": "W3"},
+                ]
+            ).to_csv(os.path.join(input_dir, "bad_wafers.csv"), index=False)
+
+            build_standard_dataset(input_dir, output_dir, bad_quantile=0.99)
+
+            target = pd.read_csv(os.path.join(output_dir, "target.csv"))
+            bad = target.loc[target["bad_flag"] == 1, ["root_lot_id", "wafer_id"]]
+            self.assertEqual(set(map(tuple, bad.values)), {("L1", "W1"), ("L2", "W3")})
+
+    def test_bad_wafers_csv_accepts_combined_root_lot_wafer_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = os.path.join(tmp, "input")
+            output_dir = os.path.join(tmp, "data")
+            os.makedirs(input_dir)
+            self._write_base_inputs(input_dir)
+            pd.DataFrame(
+                [
+                    {"root_lot_wafer_id": "L1|W2"},
+                    {"root_lot_wafer_id": "L2|W4"},
+                ]
+            ).to_csv(os.path.join(input_dir, "bad_wafers.csv"), index=False)
+
+            build_standard_dataset(input_dir, output_dir, bad_quantile=0.99)
+
+            target = pd.read_csv(os.path.join(output_dir, "target.csv"))
+            bad = target.loc[target["bad_flag"] == 1, ["root_lot_id", "wafer_id"]]
+            self.assertEqual(set(map(tuple, bad.values)), {("L1", "W2"), ("L2", "W4")})
+
+    def test_bad_wafers_csv_rejects_unknown_wafer_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = os.path.join(tmp, "input")
+            output_dir = os.path.join(tmp, "data")
+            os.makedirs(input_dir)
+            self._write_base_inputs(input_dir)
+            pd.DataFrame([{"root_lot_id": "MISSING", "wafer_id": "W9"}]).to_csv(
+                os.path.join(input_dir, "bad_wafers.csv"), index=False
+            )
+
+            with self.assertRaisesRegex(ValueError, "bad_wafers.csv contains wafer IDs not present"):
+                build_standard_dataset(input_dir, output_dir, bad_quantile=0.99)
 
 
 if __name__ == "__main__":

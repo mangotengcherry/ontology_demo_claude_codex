@@ -27,14 +27,17 @@ def generate_virtual_input_dataset(input_dir: str = "input", n_wafers: int = 250
     raw = _build_raw_data(n_wafers=n_wafers, seed=seed)
     shap_values = _build_bad_wafer_mean_shap()
     relation = _build_prc_metro_relation()
+    bad_wafers = _build_bad_wafers(raw)
 
     raw.to_csv(os.path.join(input_dir, "raw_data.csv"), index=False)
     shap_values.to_csv(os.path.join(input_dir, "x_feature_shap_value.csv"), index=False)
     relation.to_csv(os.path.join(input_dir, "prc_metro_relation.csv"), index=False)
+    bad_wafers.to_csv(os.path.join(input_dir, "bad_wafers.csv"), index=False)
     return {
         "input_dir": input_dir,
         "n_wafers": int(len(raw)),
         "n_features": int(len([c for c in raw.columns if c not in {"root_lot_id", "wafer_id", "tkout_time", "target"}])),
+        "n_bad_wafers": int(len(bad_wafers)),
     }
 
 
@@ -113,6 +116,12 @@ def _build_prc_metro_relation() -> pd.DataFrame:
             }
         ]
     )
+
+
+def _build_bad_wafers(raw: pd.DataFrame) -> pd.DataFrame:
+    threshold = pd.to_numeric(raw["target"], errors="coerce").quantile(0.80)
+    bad = raw.loc[pd.to_numeric(raw["target"], errors="coerce") >= threshold, ["root_lot_id", "wafer_id"]]
+    return bad.reset_index(drop=True)
 
 
 def _z(values: np.ndarray) -> np.ndarray:
