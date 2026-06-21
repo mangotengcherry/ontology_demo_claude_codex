@@ -1,4 +1,4 @@
-"""Load and lightly validate the demo CSVs. The Streamlit app uses only these."""
+"""Load and lightly validate the standard ontology-SHAP CSV artifacts."""
 from __future__ import annotations
 
 import os
@@ -7,8 +7,7 @@ from typing import Dict
 import pandas as pd
 
 REQUIRED_COLUMNS: Dict[str, list] = {
-    "feature_matrix": ["root_lot_id", "wafer_id", "fdc_cvd_pressure_slope_p95",
-                       "metro_thk_edge_wl128", "final_eds_proxy_leakage_feature"],
+    "feature_matrix": ["root_lot_id", "wafer_id"],
     "target": ["root_lot_id", "wafer_id", "defect_rate", "bad_flag"],
     "shap_values": ["root_lot_id", "wafer_id", "target_id", "feature_id",
                     "feature_value", "shap_value", "abs_shap_value", "shap_direction"],
@@ -27,7 +26,7 @@ def load_all_data(data_dir: str = "data") -> Dict[str, pd.DataFrame]:
         path = os.path.join(data_dir, f"{name}.csv")
         if not os.path.exists(path):
             raise FileNotFoundError(
-                f"Missing {path}. Run `python run_demo.py` (or `python -m src.data_generator`) first."
+                f"Missing {path}. Run `python3 run_demo.py` first to build standard CSV artifacts."
             )
         # causal_edges.csv has a leading '#' ontology-market comment line.
         df = pd.read_csv(path, comment="#") if name == "causal_edges" else pd.read_csv(path)

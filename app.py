@@ -1,7 +1,7 @@
-"""Ontology 기반 SHAP 해석 데모 (Streamlit).
+"""Ontology 기반 SHAP 해석 대시보드 (Streamlit).
 
-이 앱은 CSV만 읽습니다 — catboost/shap 없이 동작합니다 (데이터 생성 시 1회 계산됨).
-실행:  streamlit run app.py   (먼저 python run_demo.py 로 CSV 생성)
+이 앱은 data/*.csv 표준 산출물만 읽습니다.
+실행:  streamlit run app.py   (먼저 python3 run_demo.py 로 CSV 생성)
 """
 from __future__ import annotations
 
@@ -31,16 +31,21 @@ def _load():
 
 
 if not os.path.exists(os.path.join(DATA_DIR, "shap_values.csv")):
-    st.error("데이터가 없습니다. 먼저 `python run_demo.py` 를 실행해 CSV를 생성하세요.")
+    st.error("데이터가 없습니다. 먼저 `python3 run_demo.py --mode virtual` 또는 `python3 run_demo.py --mode real` 을 실행하세요.")
     st.stop()
 
 data, mapped = _load()
 target = data["target"]
 feature_dict = data["feature_dictionary"]
+is_feature_level_shap = (
+    "shap_scope" in mapped.columns
+    and not mapped.empty
+    and mapped["shap_scope"].fillna("").eq("bad_wafer_mean").all()
+)
 
 # ── 1. 제목 ─────────────────────────────────────────────────────────────────
 st.title("반도체 수율 분석을 위한 Ontology 기반 SHAP 해석 데모")
-st.caption("Ontology-driven SHAP Root-Cause Demo for Semiconductor Yield · 매니저 컨셉 데모")
+st.caption("Ontology-driven SHAP Root-Cause Candidate Analysis")
 
 # ── 2. 컨셉 가드레일 ─────────────────────────────────────────────────────────
 st.info(
@@ -85,7 +90,7 @@ sel_wafer = st.selectbox("분석할 wafer 선택", bad_df["wafer_id"].tolist())
 sel_lot = target.loc[target["wafer_id"] == sel_wafer, "root_lot_id"].iloc[0]
 
 # ── 6. Raw SHAP view ─────────────────────────────────────────────────────────
-st.subheader("4) Raw SHAP view — 선택 wafer")
+st.subheader("4) Raw SHAP view — bad wafer cohort" if is_feature_level_shap else "4) Raw SHAP view — 선택 wafer")
 top_n = st.slider("top-N feature", 5, 12, 10, 1, key="topn")
 top_shap = get_top_shap_features(mapped, sel_wafer, sel_lot, top_n=top_n)
 left, right = st.columns([1.1, 1])
@@ -95,9 +100,15 @@ with left:
     disp = top_shap[show_cols].copy()
     disp.insert(0, "⛔", top_shap["is_leakage"].map({True: "⛔", False: ""}))
     st.dataframe(disp, width="stretch", hide_index=True)
-    st.caption("⛔ 표시 = 인과 해석 제외(leakage). raw SHAP에서는 크지만 인과 가설에서 배제됩니다.")
+    if is_feature_level_shap:
+        st.caption("bad wafer cohort 평균 SHAP입니다. ⛔ 표시 = 인과 해석 제외(leakage).")
+    else:
+        st.caption("⛔ 표시 = 인과 해석 제외(leakage). raw SHAP에서는 크지만 인과 가설에서 배제됩니다.")
 with right:
-    st.plotly_chart(viz.top_shap_bar(top_shap, sel_wafer), width="stretch")
+    st.plotly_chart(
+        viz.top_shap_bar(top_shap, "bad wafer cohort" if is_feature_level_shap else sel_wafer),
+        width="stretch",
+    )
 
 # ── 7. Ontology-level 집계 ───────────────────────────────────────────────────
 st.subheader("5) Ontology-level SHAP 집계 (aggregation)")
@@ -158,7 +169,7 @@ with st.expander("7) Feature/Ontology Market 운영 모델 (governance)"):
 st.subheader("8) Export")
 if st.button("outputs/ 로 내보내기 (hypothesis cards + ontology SHAP summary)"):
     os.makedirs(OUT_DIR, exist_ok=True)
-    cards.to_csv(os.path.join(OUT_DIR, "demo_hypothesis_cards.csv"), index=False)
+    cards.to_csv(os.path.join(OUT_DIR, "hypothesis_cards.csv"), index=False)
     role_agg = aggregate_shap_by_context(mapped, ["causal_role"], wafer_ids=bad_df["wafer_id"].tolist())
     role_agg.to_csv(os.path.join(OUT_DIR, "ontology_level_shap_summary.csv"), index=False)
-    st.success(f"저장 완료: {OUT_DIR}/demo_hypothesis_cards.csv, {OUT_DIR}/ontology_level_shap_summary.csv")
+    st.success(f"저장 완료: {OUT_DIR}/hypothesis_cards.csv, {OUT_DIR}/ontology_level_shap_summary.csv")

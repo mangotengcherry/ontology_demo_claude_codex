@@ -1,78 +1,102 @@
-"""End-to-end demo pipeline.
+"""Run ontology-SHAP analysis with virtual input data or real company inputs.
 
-generate data + real SHAP  ->  build hypothesis cards  ->  export outputs  ->  README assets
-
-Run:  python run_demo.py
-Then: streamlit run app.py
+Default behavior is `--mode auto`: if `input/raw_data.csv`,
+`input/x_feature_shap_value.csv`, and `input/prc_metro_relation.csv` exist, the
+real dataset adapter is used. Otherwise virtual company-style input CSVs are
+generated first, then the same real-data pipeline is executed.
 """
 from __future__ import annotations
 
+import argparse
 import os
 
-import pandas as pd
-
-from src.data_generator import generate_all
-from src.loaders import load_all_data
-from src.ontology_mapping import map_shap_to_feature_dictionary
-from src.shap_interpreter import aggregate_shap_by_context
-from src.hypothesis_engine import build_hypothesis_cards, naive_vs_ontology_summary
+from src.pipeline import run_real_dataset_pipeline
+from src.real_dataset_adapter import input_files_exist
+from src.virtual_data_generator import generate_virtual_input_dataset
 
 DATA_DIR = "data"
 OUT_DIR = "outputs"
+INPUT_DIR = "input"
 
 
 def main() -> None:
-    # 1) Generate every CSV (incl. real CatBoost + TreeSHAP, or logged fallback).
-    summary = generate_all(DATA_DIR)
+    args = _parse_args()
+    mode = _resolve_mode(args.mode, args.input_dir)
+    if mode == "real":
+        result = run_real_dataset_pipeline(
+            input_dir=args.input_dir,
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            bad_quantile=args.bad_quantile,
+        )
+        _print_real_summary(result, args.data_dir, args.output_dir)
+        return
 
-    # 2) Load + map ontology metadata onto SHAP.
-    data = load_all_data(DATA_DIR)
-    mapped = map_shap_to_feature_dictionary(data["shap_values"], data["feature_dictionary"])
-
-    # 3) Headline check: naive (mediator) vs ontology root vs ground truth.
-    cmp = naive_vs_ontology_summary(
-        mapped, data["target"], data["causal_edges"], data["feature_dictionary"], data["ground_truth"]
+    virtual_summary = generate_virtual_input_dataset(args.input_dir, n_wafers=args.virtual_wafers)
+    result = run_real_dataset_pipeline(
+        input_dir=args.input_dir,
+        data_dir=args.data_dir,
+        output_dir=args.output_dir,
+        bad_quantile=args.bad_quantile,
     )
+    _print_virtual_summary(virtual_summary, result, args.input_dir, args.data_dir, args.output_dir)
 
-    # 4) Build hypothesis cards + ontology-level SHAP aggregation; export.
-    cards = build_hypothesis_cards(
-        mapped, data["target"], data["process_history"], data["causal_edges"],
-        data["feature_dictionary"], top_n=5,
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Ontology-SHAP analysis runner")
+    parser.add_argument("--mode", choices=["auto", "virtual", "real"], default="auto")
+    parser.add_argument("--input-dir", default=INPUT_DIR)
+    parser.add_argument("--data-dir", default=DATA_DIR)
+    parser.add_argument("--output-dir", default=OUT_DIR)
+    parser.add_argument(
+        "--bad-quantile",
+        type=float,
+        default=0.80,
+        help="Target quantile used to flag bad wafers when raw_data.csv has no bad_flag column.",
     )
-    bad_wafers = data["target"].loc[data["target"]["bad_flag"] == 1, "wafer_id"].tolist()
-    role_agg = aggregate_shap_by_context(mapped, ["causal_role"], wafer_ids=bad_wafers)
-    step_agg = aggregate_shap_by_context(mapped, ["process_step"], wafer_ids=bad_wafers)
-    mech_agg = aggregate_shap_by_context(mapped, ["mechanism_group"], wafer_ids=bad_wafers)
-    ontology_summary = pd.concat([role_agg.assign(group_kind="causal_role"),
-                                  step_agg.assign(group_kind="process_step"),
-                                  mech_agg.assign(group_kind="mechanism_group")], ignore_index=True)
+    parser.add_argument("--virtual-wafers", type=int, default=250, help="Number of wafers to generate in virtual mode.")
+    return parser.parse_args()
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    cards.to_csv(os.path.join(OUT_DIR, "demo_hypothesis_cards.csv"), index=False)
-    ontology_summary.to_csv(os.path.join(OUT_DIR, "ontology_level_shap_summary.csv"), index=False)
 
-    # 5) README result images.
-    from scripts.make_readme_assets import main as make_assets
-    make_assets(DATA_DIR)
+def _resolve_mode(mode: str, input_dir: str) -> str:
+    if mode != "auto":
+        return mode
+    return "real" if input_files_exist(input_dir) else "virtual"
 
-    # --- Acceptance summary
+
+def _print_real_summary(result: dict, data_dir: str, output_dir: str) -> None:
+    data = result["data"]
+    summary = result["summary"]
+    cards = result["cards"]
     print("\n" + "=" * 78)
-    print("ACCEPTANCE CHECK")
+    print("ONTOLOGY-SHAP REAL DATASET RUN")
     print("=" * 78)
-    print(f"SHAP mode                         : {summary['shap_mode']}")
-    print(f"naive top-SHAP (excl. leakage)    : {cmp['naive_top_nonleak']} "
-          f"[{cmp['naive_top_nonleak_role']}]  (= 증상/mediator)")
-    print(f"ontology-traced root cause        : {cmp['ontology_root']}")
-    print(f"ground-truth root                 : {cmp['ground_truth_root']}")
-    print(f"MATCH (ontology == ground truth)  : {'✓' if cmp['match'] else '✗'}")
-    target_card = cards["evidence_path_text"].str.startswith(
-        "CVD 압력 불안정(pressure instability) → edge 두께 비균일(non-uniformity) → 불량률 상승"
-    ).any()
-    print(f"required CVD card present         : {'✓' if target_card else '✗'}")
-    print(f"leakage excluded from cards       : {'✓' if cmp['naive_top_overall_role'] == 'leakage_or_post_outcome' else '?'}"
-          f"  (raw #1 = {cmp['naive_top_overall']})")
-    print(f"outputs written                   : {OUT_DIR}/demo_hypothesis_cards.csv, "
-          f"{OUT_DIR}/ontology_level_shap_summary.csv")
+    print(f"standard artifacts               : {data_dir}/")
+    print(f"wafers / bad wafers              : {len(data['target'])} / {int(data['target']['bad_flag'].sum())}")
+    print(f"features with SHAP               : {data['shap_values']['feature_id'].nunique()}")
+    print(f"naive top-SHAP (excl. leakage)   : {summary['naive_top_nonleak']} [{summary['naive_top_nonleak_role']}]")
+    print(f"ontology-traced root candidate   : {summary['ontology_root'] or '미상'}")
+    print(f"hypothesis cards                 : {len(cards)}")
+    print(f"outputs                          : {output_dir}/hypothesis_cards.csv")
+    print(f"report                           : {os.path.join(output_dir, 'report.md')}")
+    print("=" * 78)
+    print("다음 단계: streamlit run app.py")
+
+
+def _print_virtual_summary(virtual_summary: dict, result: dict, input_dir: str, data_dir: str, output_dir: str) -> None:
+    summary = result["summary"]
+    cards = result["cards"]
+    print("\n" + "=" * 78)
+    print("ONTOLOGY-SHAP VIRTUAL DATASET RUN")
+    print("=" * 78)
+    print(f"virtual input files               : {input_dir}/")
+    print(f"virtual wafers / features         : {virtual_summary['n_wafers']} / {virtual_summary['n_features']}")
+    print(f"standard artifacts                : {data_dir}/")
+    print(f"naive top-SHAP (excl. leakage)    : {summary['naive_top_nonleak']} [{summary['naive_top_nonleak_role']}]")
+    print(f"ontology-traced root candidate    : {summary['ontology_root'] or '미상'}")
+    print(f"hypothesis cards                  : {len(cards)}")
+    print(f"outputs                           : {output_dir}/hypothesis_cards.csv")
+    print(f"report                            : {os.path.join(output_dir, 'report.md')}")
     print("=" * 78)
     print("다음 단계: streamlit run app.py")
 

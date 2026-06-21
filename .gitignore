@@ -7,3 +7,10 @@ __pycache__/
 claude.md
 # CatBoost training-log artifact (created at data-generation time)
 catboost_info/
+dataset_info.md
+
+# Local input data and generated analysis artifacts
+input/
+data/
+outputs/
+docs/assets/

@@ -21,6 +21,12 @@ def get_top_shap_features(
     top_n: int = 10,
 ) -> pd.DataFrame:
     """Top-N features by |SHAP| for one wafer (raw SHAP view, leakage still included)."""
+    if (
+        "shap_scope" in mapped_shap_df.columns
+        and not mapped_shap_df.empty
+        and mapped_shap_df["shap_scope"].fillna("").eq("bad_wafer_mean").all()
+    ):
+        return mapped_shap_df.sort_values("abs_shap_value", ascending=False).head(top_n).reset_index(drop=True)
     df = mapped_shap_df[
         (mapped_shap_df["wafer_id"] == wafer_id) & (mapped_shap_df["target_id"] == target_id)
     ]
@@ -42,6 +48,10 @@ def aggregate_shap_by_context(
     df = mapped_shap_df
     if wafer_ids is not None:
         df = df[df["wafer_id"].isin(wafer_ids)]
+        if df.empty and "shap_scope" in mapped_shap_df.columns:
+            cohort_mean = mapped_shap_df["shap_scope"].fillna("").eq("bad_wafer_mean")
+            if cohort_mean.all():
+                df = mapped_shap_df
     agg = (
         df.groupby(group_cols)
         .agg(

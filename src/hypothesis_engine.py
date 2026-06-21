@@ -43,15 +43,18 @@ def build_hypothesis_cards(
     temporal_map = feature_dict_df.set_index("feature_id")["temporal_relation_to_target"].to_dict()
     control_map = feature_dict_df.set_index("feature_id")["controllability"].to_dict()
     name_map = feature_dict_df.set_index("feature_id")["display_name_ko"].to_dict()
+    process_map = feature_dict_df.set_index("feature_id")["process_step"].to_dict()
 
     bad_wafers = target_df.loc[target_df["bad_flag"] == 1, "wafer_id"].tolist()
     n_bad = len(bad_wafers)
 
     # --- Aggregate evidence over the bad-wafer group.
-    bad_shap = mapped_shap_df[mapped_shap_df["wafer_id"].isin(bad_wafers)]
+    bad_shap = _bad_group_shap(mapped_shap_df, bad_wafers)
     mean_abs = bad_shap.groupby("feature_id")["abs_shap_value"].mean()
-    max_nonleak = mean_abs[[f for f in mean_abs.index
-                            if role_map.get(f) != "leakage_or_post_outcome"]].max()
+    nonleak_features = [f for f in mean_abs.index if role_map.get(f) != "leakage_or_post_outcome"]
+    max_nonleak = mean_abs[nonleak_features].max() if nonleak_features else mean_abs.max()
+    if pd.isna(max_nonleak) or max_nonleak <= 0:
+        max_nonleak = 0.0
 
     anomaly = _feature_anomaly(mapped_shap_df, bad_wafers)          # standardized bad-vs-good gap
     recurrence = _feature_recurrence(mapped_shap_df, bad_wafers)    # fraction of bad wafers elevated
@@ -64,7 +67,8 @@ def build_hypothesis_cards(
     # --- Trace each high-SHAP mediator upstream to a root; group mediators by root.
     mediators = [
         f for f in mean_abs.index
-        if role_map.get(f) == "mediator_candidate" and mean_abs[f] > 0.05 * max_nonleak
+        if role_map.get(f) == "mediator_candidate"
+        and (max_nonleak == 0.0 or mean_abs[f] > 0.05 * max_nonleak)
     ]
     root_groups: Dict[str, Dict] = {}
     for med in sorted(mediators, key=lambda f: -mean_abs[f]):
@@ -76,11 +80,11 @@ def build_hypothesis_cards(
     # --- Direct root causes that act on the target without a metro mediator (e.g. queue time).
     for f in mean_abs.index:
         if role_map.get(f) == "root_cause_candidate" and f not in root_groups:
-            if graph.has_edge(f, TARGET_NODE) and mean_abs[f] > 0.05 * max_nonleak:
+            if graph.has_edge(f, TARGET_NODE) and (max_nonleak == 0.0 or mean_abs[f] > 0.05 * max_nonleak):
                 root_groups.setdefault(f, {"root": f, "mediators": []})
 
     primary_chamber = _bad_chamber(process_history_df, bad_wafers)
-    ppid_confounded = anomaly.get("recipe_ppid_77a_flag", 0.0) > 0.5
+    ppid_confounded = _has_ppid_confounding(feature_dict_df, anomaly)
 
     cards: List[Dict] = []
     for i, (key, grp) in enumerate(
@@ -92,7 +96,7 @@ def build_hypothesis_cards(
             idx=i, key=key, grp=grp, mean_abs=mean_abs, max_nonleak=max_nonleak,
             anomaly=anomaly, recurrence=recurrence, n_bad=n_bad,
             role_map=role_map, mech_map=mech_map, temporal_map=temporal_map,
-            control_map=control_map, name_map=name_map,
+            control_map=control_map, name_map=name_map, process_map=process_map,
             primary_chamber=primary_chamber, ppid_confounded=ppid_confounded,
             excluded_leakage=excluded_leakage,
         )
@@ -116,6 +120,26 @@ def _build_graph(causal_edges_df: pd.DataFrame) -> nx.DiGraph:
         g.add_edge(e["source_feature"], e["target_feature"],
                    relation=e["relation"], confidence=float(e["confidence"]))
     return g
+
+
+def _is_feature_level_shap(mapped_shap_df: pd.DataFrame) -> bool:
+    return (
+        "shap_scope" in mapped_shap_df.columns
+        and not mapped_shap_df.empty
+        and mapped_shap_df["shap_scope"].fillna("").eq("bad_wafer_mean").all()
+    )
+
+
+def _bad_group_shap(mapped_shap_df: pd.DataFrame, bad_wafers: List[str]) -> pd.DataFrame:
+    """Return SHAP evidence for the bad group.
+
+    Legacy wafer-level SHAP tables are filtered by bad wafer IDs. Current real
+    and virtual input uses one bad-wafer cohort mean SHAP row per feature, which
+    is already bad-group evidence and should not be filtered by wafer ID.
+    """
+    if _is_feature_level_shap(mapped_shap_df):
+        return mapped_shap_df
+    return mapped_shap_df[mapped_shap_df["wafer_id"].isin(bad_wafers)]
 
 
 def _trace_upstream_root(
@@ -149,6 +173,14 @@ def _trace_upstream_root(
 # --------------------------------------------------------------------------------------
 def _feature_anomaly(mapped_shap_df: pd.DataFrame, bad_wafers: List[str]) -> Dict[str, float]:
     """Standardized gap between bad-wafer mean and overall mean of each feature_value."""
+    if "bad_good_separation_simple" in mapped_shap_df.columns:
+        series = (
+            mapped_shap_df[["feature_id", "bad_good_separation_simple"]]
+            .drop_duplicates("feature_id")
+            .set_index("feature_id")["bad_good_separation_simple"]
+        )
+        return pd.to_numeric(series, errors="coerce").fillna(0.0).to_dict()
+
     out: Dict[str, float] = {}
     fv = mapped_shap_df[["wafer_id", "feature_id", "feature_value"]].drop_duplicates()
     for feat, sub in fv.groupby("feature_id"):
@@ -164,6 +196,14 @@ def _feature_anomaly(mapped_shap_df: pd.DataFrame, bad_wafers: List[str]) -> Dic
 
 def _feature_recurrence(mapped_shap_df: pd.DataFrame, bad_wafers: List[str]) -> Dict[str, float]:
     """Fraction of bad wafers where the feature value exceeds the overall (mean + 0.5 std)."""
+    if "bad_recurrence" in mapped_shap_df.columns:
+        series = (
+            mapped_shap_df[["feature_id", "bad_recurrence"]]
+            .drop_duplicates("feature_id")
+            .set_index("feature_id")["bad_recurrence"]
+        )
+        return pd.to_numeric(series, errors="coerce").fillna(0.0).to_dict()
+
     out: Dict[str, float] = {}
     fv = mapped_shap_df[["wafer_id", "feature_id", "feature_value"]].drop_duplicates()
     for feat, sub in fv.groupby("feature_id"):
@@ -184,8 +224,25 @@ def _bad_chamber(process_history_df: pd.DataFrame, bad_wafers: List[str]) -> str
         & (process_history_df["wafer_id"].isin(bad_wafers))
     ]
     if cvd.empty:
+        cvd = process_history_df[process_history_df["wafer_id"].isin(bad_wafers)]
+    if cvd.empty or "chamber_id" not in cvd.columns:
         return None
-    return cvd["chamber_id"].value_counts().idxmax()
+    chambers = cvd["chamber_id"].replace("", np.nan).dropna()
+    if chambers.empty:
+        return None
+    return chambers.value_counts().idxmax()
+
+
+def _has_ppid_confounding(feature_dict_df: pd.DataFrame, anomaly: Dict[str, float]) -> bool:
+    if "metric_type" not in feature_dict_df.columns:
+        return anomaly.get("recipe_ppid_77a_flag", 0.0) > 0.5
+    ppid_features = feature_dict_df.loc[
+        feature_dict_df["metric_type"].astype(str).str.lower().eq("ppid"),
+        "feature_id",
+    ]
+    if not ppid_features.empty:
+        return any(anomaly.get(f, 0.0) > 0.5 for f in ppid_features)
+    return anomaly.get("recipe_ppid_77a_flag", 0.0) > 0.5
 
 
 def _group_strength(grp: Dict, mean_abs: pd.Series) -> float:
@@ -198,7 +255,7 @@ def _group_strength(grp: Dict, mean_abs: pd.Series) -> float:
 # --------------------------------------------------------------------------------------
 def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
                role_map, mech_map, temporal_map, control_map, name_map,
-               primary_chamber, ppid_confounded, excluded_leakage) -> Dict:
+               process_map, primary_chamber, ppid_confounded, excluded_leakage) -> Dict:
     root = grp.get("root")
     mediators = grp["mediators"]
     root_feats = [root] if root else []
@@ -210,8 +267,11 @@ def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
     shap_strength = "strong" if rel_strength >= 1.2 else "moderate" if rel_strength >= 0.6 else "weak"
 
     primary_mech = mech_map.get(root) if root else (mech_map.get(mediators[0]) if mediators else "unknown")
-    primary_step = "CVD" if root and "CVD" in str(mech_map.get(root, "")) else (
-        "QUEUE" if root == "queue_time_before_etch" else "CVD_POST_METRO")
+    primary_step = process_map.get(root) if root else None
+    if not primary_step and mediators:
+        primary_step = process_map.get(mediators[0])
+    if not primary_step:
+        primary_step = "UNKNOWN"
 
     # Recurrence of the mechanism: use the root if present, else the strongest mediator.
     anchor = root if root else (mediators[0] if mediators else key)
@@ -232,16 +292,15 @@ def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
                    confounding, bool(root), bool(mediators))
 
     evidence_path_text = _evidence_path_ko(root, mediators, mech_map)
-    chamber_txt = f" (집중 챔버: {primary_chamber})" if primary_chamber and primary_step == "CVD" else ""
+    chamber_txt = f" (집중 챔버: {primary_chamber})" if primary_chamber else ""
 
     interpretation_text = _interpretation_ko(
         root, mediators, name_map, mech_map, shap_strength, bad_recurrence,
-        confounding, controllability, primary_chamber if primary_step == "CVD" else None,
+        confounding, controllability, primary_chamber,
         ppid_confounded,
     )
     recommended = _recommended_validation_ko(root, mediators, primary_step,
-                                             primary_chamber if primary_step == "CVD" else None,
-                                             ppid_confounded)
+                                             primary_chamber, ppid_confounded)
 
     return {
         "hypothesis_id": f"HYP_{idx:03d}",
@@ -249,7 +308,7 @@ def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
         "bad_wafer_group_size": n_bad,
         "primary_process_step": primary_step,
         "primary_mechanism_group": primary_mech,
-        "primary_chamber_if_available": primary_chamber if primary_step == "CVD" else "",
+        "primary_chamber_if_available": primary_chamber or "",
         "root_cause_candidate_features": ", ".join(root_feats),
         "mediator_candidate_features": ", ".join(mediators),
         "proxy_features": ", ".join(proxies),
@@ -345,8 +404,25 @@ def naive_vs_ontology_summary(
     name_map = feature_dict_df.set_index("feature_id")["display_name_ko"].to_dict()
 
     bad_wafers = target_df.loc[target_df["bad_flag"] == 1, "wafer_id"].tolist()
-    bad_shap = mapped_shap_df[mapped_shap_df["wafer_id"].isin(bad_wafers)]
+    bad_shap = _bad_group_shap(mapped_shap_df, bad_wafers)
     mean_abs = bad_shap.groupby("feature_id")["abs_shap_value"].mean().sort_values(ascending=False)
+    if mean_abs.empty:
+        return {
+            "naive_top_overall": None,
+            "naive_top_overall_ko": "미상",
+            "naive_top_overall_role": "unknown",
+            "naive_top_nonleak": None,
+            "naive_top_nonleak_ko": "미상",
+            "naive_top_nonleak_role": "unknown",
+            "ontology_root": None,
+            "ontology_root_ko": "미상",
+            "ground_truth_root": None,
+            "ground_truth_root_ko": "미상",
+            "match": False,
+            "mean_abs_by_feature": mean_abs,
+            "role_map": role_map,
+            "name_map": name_map,
+        }
 
     naive_top_overall = mean_abs.index[0]
     nonleak = [f for f in mean_abs.index if role_map.get(f) != "leakage_or_post_outcome"]
@@ -360,7 +436,7 @@ def naive_vs_ontology_summary(
     if ontology_root is None and role_map.get(naive_top_nonleak) == "root_cause_candidate":
         ontology_root = naive_top_nonleak
 
-    gt_root = ground_truth_df.iloc[0]["true_root_feature"]
+    gt_root = ground_truth_df.iloc[0]["true_root_feature"] if not ground_truth_df.empty else ""
     return {
         "naive_top_overall": naive_top_overall,
         "naive_top_overall_ko": name_map.get(naive_top_overall, naive_top_overall),
@@ -372,7 +448,7 @@ def naive_vs_ontology_summary(
         "ontology_root_ko": name_map.get(ontology_root, ontology_root) if ontology_root else "미상",
         "ground_truth_root": gt_root,
         "ground_truth_root_ko": name_map.get(gt_root, gt_root),
-        "match": bool(ontology_root == gt_root),
+        "match": bool(gt_root and ontology_root == gt_root),
         "mean_abs_by_feature": mean_abs,
         "role_map": role_map,
         "name_map": name_map,

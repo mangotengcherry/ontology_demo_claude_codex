@@ -1,1 +1,1 @@
-"""Ontology-driven SHAP root-cause demo (semiconductor yield concept demo)."""
+"""Ontology-driven SHAP root-cause candidate analysis."""

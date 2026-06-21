@@ -1,4 +1,4 @@
-"""Plotly figures for the Streamlit app (interactive). README uses matplotlib separately."""
+"""Plotly figures for the Streamlit app."""
 from __future__ import annotations
 
 from typing import List
@@ -31,7 +31,7 @@ def bad_wafer_defect_bar(target_df: pd.DataFrame, top_k: int = 20) -> go.Figure:
 
 
 def top_shap_bar(top_shap_df: pd.DataFrame, wafer_id: str) -> go.Figure:
-    """Top-SHAP horizontal bar for one wafer, colored by causal_role; leakage marked."""
+    """Top-SHAP horizontal bar, colored by causal_role; leakage marked."""
     df = top_shap_df.copy().sort_values("abs_shap_value")
     df["label"] = df.apply(
         lambda r: f"{r['feature_id']}  ⛔" if r.get("is_leakage", False) else r["feature_id"], axis=1
@@ -44,7 +44,7 @@ def top_shap_bar(top_shap_df: pd.DataFrame, wafer_id: str) -> go.Figure:
             hovertemplate="%{y}<br>SHAP=%{x:.3f}<extra>" + role + "</extra>",
         )
     fig.update_layout(
-        barmode="overlay", title=f"Raw SHAP — wafer {wafer_id} (⛔ = leakage, 인과 해석 제외)",
+        barmode="overlay", title=f"Raw SHAP — {wafer_id} (⛔ = leakage, 인과 해석 제외)",
         xaxis_title="SHAP value (→ 불량률 증가)", yaxis_title="feature", legend_title="causal_role",
     )
     return fig
