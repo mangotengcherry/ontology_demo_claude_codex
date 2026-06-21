@@ -37,8 +37,6 @@ streamlit run app.py
 | `x_feature_shap_value.csv` | `feature`, `shap_value` | bad wafer만 대상으로 계산한 feature별 평균 SHAP |
 | `prc_metro_relation.csv` | `prc_step`, `metro_step`, `metro_item`, `subitem_id`, `metro_grade` | 공정 step과 metro feature의 관계 seed |
 
-feature 컬럼명은 `dataset_info.md`의 규칙을 따릅니다.
-
 ```text
 cat|ppid|공정step
 cat|eqp|공정step
