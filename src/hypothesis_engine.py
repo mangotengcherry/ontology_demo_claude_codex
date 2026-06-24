@@ -36,8 +36,15 @@ def build_hypothesis_cards(
     causal_edges_df: pd.DataFrame,
     feature_dict_df: pd.DataFrame,
     top_n: int = 5,
+    mediation_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Build causal-hypothesis cards for the bad-wafer group of the (single) target."""
+    """Build causal-hypothesis cards for the bad-wafer group of the (single) target.
+
+    When `mediation_df` (measured root->mediator->target evidence) is supplied, the
+    evidence chain and grade are driven by the *measured* indirect effect and
+    proportion mediated rather than by SHAP magnitude alone.
+    """
+    med_lookup = _mediation_lookup(mediation_df)
     role_map = feature_dict_df.set_index("feature_id")["causal_role"].to_dict()
     mech_map = feature_dict_df.set_index("feature_id")["mechanism_group"].to_dict()
     temporal_map = feature_dict_df.set_index("feature_id")["temporal_relation_to_target"].to_dict()
@@ -70,9 +77,10 @@ def build_hypothesis_cards(
         if role_map.get(f) == "mediator_candidate"
         and (max_nonleak == 0.0 or mean_abs[f] > 0.05 * max_nonleak)
     ]
+    root_score = _root_indirect_scores(med_lookup)
     root_groups: Dict[str, Dict] = {}
     for med in sorted(mediators, key=lambda f: -mean_abs[f]):
-        root = _trace_upstream_root(graph, med, role_map, anomaly)
+        root = _trace_upstream_root(graph, med, role_map, anomaly, score_map=root_score)
         key = root if root is not None else med  # mediator with no traceable root: stands alone
         grp = root_groups.setdefault(key, {"root": root, "mediators": []})
         grp["mediators"].append(med)
@@ -89,7 +97,7 @@ def build_hypothesis_cards(
     cards: List[Dict] = []
     for i, (key, grp) in enumerate(
         sorted(root_groups.items(),
-               key=lambda kv: -_group_strength(kv[1], mean_abs)),
+               key=lambda kv: -_group_rank(kv[1], mean_abs, med_lookup)),
         start=1,
     ):
         card = _make_card(
@@ -98,7 +106,7 @@ def build_hypothesis_cards(
             role_map=role_map, mech_map=mech_map, temporal_map=temporal_map,
             control_map=control_map, name_map=name_map, process_map=process_map,
             primary_chamber=primary_chamber, ppid_confounded=ppid_confounded,
-            excluded_leakage=excluded_leakage,
+            excluded_leakage=excluded_leakage, med_lookup=med_lookup,
         )
         cards.append(card)
 
@@ -143,26 +151,33 @@ def _bad_group_shap(mapped_shap_df: pd.DataFrame, bad_wafers: List[str]) -> pd.D
 
 
 def _trace_upstream_root(
-    graph: nx.DiGraph, mediator: str, role_map: Dict, anomaly: Dict, _depth: int = 0
+    graph: nx.DiGraph, mediator: str, role_map: Dict, anomaly: Dict,
+    _depth: int = 0, score_map: Dict | None = None,
 ) -> str | None:
-    """Walk upstream along `physicallyAffects` edges to the most-upstream anomalous root."""
+    """Walk upstream along `physicallyAffects` edges to the most-upstream root.
+
+    Among candidate roots, prefer the one with the largest measured indirect-effect
+    score when `score_map` is available, falling back to the bad-vs-good anomaly.
+    """
     if mediator not in graph or _depth > 10:
         return None
     upstream = [
         u for u, _, d in graph.in_edges(mediator, data=True)
         if d.get("relation") == "physicallyAffects"
     ]
-    # Prefer an anomalous root_cause_candidate; recurse to find a still-more-upstream one.
     best = None
     best_score = -np.inf
     for u in upstream:
-        deeper = _trace_upstream_root(graph, u, role_map, anomaly, _depth + 1)
+        deeper = _trace_upstream_root(graph, u, role_map, anomaly, _depth + 1, score_map)
         candidate = deeper if deeper is not None else (
             u if role_map.get(u) == "root_cause_candidate" else None
         )
         if candidate is None:
             continue
-        score = anomaly.get(candidate, 0.0)  # prefer the more anomalous (elevated) root
+        if score_map and candidate in score_map:
+            score = score_map[candidate]
+        else:
+            score = anomaly.get(candidate, 0.0)
         if score > best_score:
             best_score, best = score, candidate
     return best
@@ -251,11 +266,121 @@ def _group_strength(grp: Dict, mean_abs: pd.Series) -> float:
 
 
 # --------------------------------------------------------------------------------------
+# Measured-evidence helpers (mediation table integration)
+# --------------------------------------------------------------------------------------
+def _finite(x) -> bool:
+    try:
+        return bool(np.isfinite(float(x)))
+    except (TypeError, ValueError):
+        return False
+
+
+def _f(x) -> str:
+    return f"{float(x):.3f}" if _finite(x) else "n/a"
+
+
+def _round(x):
+    return round(float(x), 4) if _finite(x) else ""
+
+
+def _prop_text(med_stat: Dict) -> str:
+    prop = med_stat.get("prop_mediated")
+    if not _finite(prop):
+        return ""
+    p = float(prop)
+    if med_stat.get("sign_consistent") and 0 < p <= 1.2:
+        return f", 전체효과의 {min(p, 1.0):.0%} 매개"
+    return ", 매개비율 불안정(부호 불일치/억제)"
+
+
+def _mediation_lookup(mediation_df) -> Dict:
+    if mediation_df is None or getattr(mediation_df, "empty", True):
+        return {}
+    return {(row["root"], row["mediator"]): row.to_dict() for _, row in mediation_df.iterrows()}
+
+
+def _root_indirect_scores(med_lookup: Dict) -> Dict:
+    scores: Dict = {}
+    for (root, _med), stat in med_lookup.items():
+        val = abs(float(stat["indirect"])) if _finite(stat.get("indirect")) else 0.0
+        scores[root] = max(scores.get(root, 0.0), val)
+    return scores
+
+
+def _group_rank(grp: Dict, mean_abs: pd.Series, med_lookup: Dict) -> float:
+    """Rank groups by measured indirect effect first, SHAP strength only as fallback."""
+    root = grp.get("root")
+    best = 0.0
+    if root:
+        for med in grp["mediators"]:
+            stat = med_lookup.get((root, med))
+            if stat and _finite(stat.get("indirect")):
+                best = max(best, abs(float(stat["indirect"])))
+    if best > 0:
+        return 1000.0 + best  # measured chains always rank above SHAP-only groups
+    return _group_strength(grp, mean_abs)
+
+
+def _grade_measured(med_stat, recurrence: float, temporal_ok: bool) -> str | None:
+    """Grade from the *measured* indirect effect; None means 'no measurement, use heuristic'."""
+    if med_stat is None:
+        return None
+    if med_stat.get("unstable"):
+        return "C"
+    p = med_stat.get("indirect_p")
+    if not _finite(p) or float(p) >= 0.05:
+        return "C"
+    indirect = abs(float(med_stat["indirect"])) if _finite(med_stat.get("indirect")) else 0.0
+    mediated = bool(med_stat.get("sign_consistent")) and _finite(med_stat.get("prop_mediated")) \
+        and float(med_stat["prop_mediated"]) >= 0.3
+    strong = indirect >= 0.2
+    stable = bool(med_stat.get("strata_stable", True))
+    if strong and mediated and stable and recurrence >= 0.5 and temporal_ok:
+        return "A"
+    if (strong or mediated) and stable:
+        return "B"
+    return "C"
+
+
+def _evidence_path_measured(root, mediator, med_stat: Dict, name_map: Dict, mech_map: Dict) -> str:
+    root_ko = name_map.get(root, root)
+    med_ko = name_map.get(mediator, mediator)
+    arrow = "↑" if _finite(med_stat.get("a")) and float(med_stat["a"]) >= 0 else "↓"
+    return (
+        f"{root_ko} {arrow} → {med_ko} (r={_f(med_stat.get('a'))}) "
+        f"→ 불량률 (indirect a·b={_f(med_stat.get('indirect'))}{_prop_text(med_stat)}, "
+        f"p={_f(med_stat.get('indirect_p'))})"
+    )
+
+
+def _measured_card_columns(med_stat) -> Dict:
+    if med_stat is None:
+        return {
+            "evidence_basis": "naming_only",
+            "measured_root_to_mediator_r": "",
+            "measured_indirect_effect": "",
+            "measured_prop_mediated": "",
+            "measured_indirect_p": "",
+            "strata_stable": "",
+        }
+    return {
+        "evidence_basis": "measured",
+        "measured_root_to_mediator_r": _round(med_stat.get("a")),
+        "measured_indirect_effect": _round(med_stat.get("indirect")),
+        "measured_prop_mediated": _round(med_stat.get("prop_mediated")),
+        "measured_indirect_p": _round(med_stat.get("indirect_p")),
+        "strata_stable": bool(med_stat.get("strata_stable", True)),
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Card construction + grading
 # --------------------------------------------------------------------------------------
 def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
                role_map, mech_map, temporal_map, control_map, name_map,
-               process_map, primary_chamber, ppid_confounded, excluded_leakage) -> Dict:
+               process_map, primary_chamber, ppid_confounded, excluded_leakage,
+               med_lookup=None) -> Dict:
+    med_lookup = med_lookup or {}
     root = grp.get("root")
     mediators = grp["mediators"]
     root_feats = [root] if root else []
@@ -288,16 +413,24 @@ def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
     confounding = "high" if (ppid_confounded and primary_step == "CVD") else "low"
     leakage_risk = "low"  # roots/mediators here are low; leakage features are excluded separately
 
-    grade = _grade(shap_strength, bad_recurrence, temporal_ok, leakage_risk,
-                   confounding, bool(root), bool(mediators))
+    primary_med = mediators[0] if mediators else None
+    med_stat = med_lookup.get((root, primary_med)) if (root and primary_med) else None
 
-    evidence_path_text = _evidence_path_ko(root, mediators, mech_map)
+    measured_grade = _grade_measured(med_stat, bad_recurrence, temporal_ok)
+    grade = measured_grade if measured_grade is not None else _grade(
+        shap_strength, bad_recurrence, temporal_ok, leakage_risk,
+        confounding, bool(root), bool(mediators))
+
     chamber_txt = f" (집중 챔버: {primary_chamber})" if primary_chamber else ""
+    if med_stat is not None:
+        evidence_path_text = _evidence_path_measured(root, primary_med, med_stat, name_map, mech_map)
+    else:
+        evidence_path_text = _evidence_path_ko(root, mediators, mech_map)
 
     interpretation_text = _interpretation_ko(
         root, mediators, name_map, mech_map, shap_strength, bad_recurrence,
         confounding, controllability, primary_chamber,
-        ppid_confounded,
+        ppid_confounded, med_stat,
     )
     recommended = _recommended_validation_ko(root, mediators, primary_step,
                                              primary_chamber, ppid_confounded)
@@ -324,6 +457,7 @@ def _make_card(idx, key, grp, mean_abs, max_nonleak, anomaly, recurrence, n_bad,
         "evidence_path_text": evidence_path_text + chamber_txt,
         "interpretation_text": interpretation_text,
         "recommended_validation": " | ".join(recommended),
+        **_measured_card_columns(med_stat),
     }
 
 
@@ -356,7 +490,8 @@ def _evidence_path_ko(root, mediators, mech_map) -> str:
 
 
 def _interpretation_ko(root, mediators, name_map, mech_map, shap_strength, recurrence,
-                       confounding, controllability, chamber, ppid_confounded) -> str:
+                       confounding, controllability, chamber, ppid_confounded,
+                       med_stat=None) -> str:
     root_ko = name_map.get(root, root) if root else "상류 원인 미상"
     med_ko = name_map.get(mediators[0], mediators[0]) if mediators else "-"
     txt = (
@@ -365,6 +500,14 @@ def _interpretation_ko(root, mediators, name_map, mech_map, shap_strength, recur
         f"ontology 인과관계 그래프를 상류로 추적하면 controllable 상류 원인 후보 '{root_ko}'가 도출됩니다. "
         f"SHAP 강도는 {shap_strength}, 불량 wafer 재현율(recurrence)은 {recurrence:.0%} 입니다."
     )
+    if med_stat is not None:
+        txt += (
+            f" raw 데이터로 측정한 매개효과는 a·b={_f(med_stat['indirect'])}"
+            f"(root→mediator r={_f(med_stat['a'])}, p={_f(med_stat['indirect_p'])})"
+            f"{_prop_text(med_stat)}이며, 이는 SHAP 순위가 아니라 데이터로 측정된 인과 사슬입니다."
+        )
+        if med_stat.get("strata_tested") and not med_stat.get("strata_stable", True):
+            txt += " 단, 챔버/PPID 층화 시 효과가 약화되어 교란(confounding) 가능성이 있습니다."
     if chamber:
         txt += f" 불량은 {chamber} 챔버에 집중되어 있습니다."
     if ppid_confounded and confounding == "high":

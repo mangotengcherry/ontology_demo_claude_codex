@@ -62,11 +62,21 @@ def write_markdown_report(
         lines.append("No causal hypothesis cards were generated.")
     else:
         for _, card in cards.iterrows():
-            lines.extend(
+            card_lines = [
+                f"### {card['hypothesis_id']} - Grade {card['hypothesis_grade']}",
+                "",
+                f"- Evidence path: {card['evidence_path_text']}",
+                f"- Evidence basis: {card.get('evidence_basis', '') or '-'}",
+            ]
+            if str(card.get("evidence_basis", "")) == "measured":
+                card_lines.append(
+                    f"- Measured mediation: a·b={card.get('measured_indirect_effect', '')}"
+                    f", % mediated={card.get('measured_prop_mediated', '')}"
+                    f", p={card.get('measured_indirect_p', '')}"
+                    f", strata_stable={card.get('strata_stable', '')}"
+                )
+            card_lines.extend(
                 [
-                    f"### {card['hypothesis_id']} - Grade {card['hypothesis_grade']}",
-                    "",
-                    f"- Evidence path: {card['evidence_path_text']}",
                     f"- Root candidates: {card['root_cause_candidate_features'] or '-'}",
                     f"- Mediators: {card['mediator_candidate_features'] or '-'}",
                     f"- SHAP strength: {card['shap_strength']}",
@@ -78,6 +88,7 @@ def write_markdown_report(
                     "",
                 ]
             )
+            lines.extend(card_lines)
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

@@ -8,6 +8,8 @@ from typing import Dict, Iterable, List
 import numpy as np
 import pandas as pd
 
+from src.causal_evidence import measure_edges
+
 TARGET_ID = "defect_rate"
 COHORT_ID = "__BAD_WAFER_COHORT__"
 RAW_DATA_FILE = "raw_data.csv"
@@ -25,6 +27,7 @@ class StandardDatasetArtifacts:
     shap_values: pd.DataFrame
     feature_dictionary: pd.DataFrame
     causal_edges: pd.DataFrame
+    mediation: pd.DataFrame
     process_history: pd.DataFrame
     engineer_feedback: pd.DataFrame
     ground_truth: pd.DataFrame
@@ -55,7 +58,8 @@ def build_standard_dataset(
     feature_ids = _ordered_union(feature_cols, shap_input["feature"].astype(str).tolist())
     feature_dictionary = _build_feature_dictionary(feature_ids, relation)
     shap_values = _build_feature_level_shap(shap_input, raw, target)
-    causal_edges = _build_causal_edges(feature_dictionary, relation)
+    mediation = measure_edges(feature_matrix, target, feature_dictionary)
+    causal_edges = _build_causal_edges(feature_dictionary, relation, mediation)
     process_history = _build_process_history(raw)
     engineer_feedback = _empty_engineer_feedback()
     ground_truth = _unknown_ground_truth()
@@ -66,6 +70,7 @@ def build_standard_dataset(
         shap_values=shap_values,
         feature_dictionary=feature_dictionary,
         causal_edges=causal_edges,
+        mediation=mediation,
         process_history=process_history,
         engineer_feedback=engineer_feedback,
         ground_truth=ground_truth,
@@ -83,6 +88,7 @@ def write_standard_dataset(artifacts: StandardDatasetArtifacts, output_dir: str 
     artifacts.process_history.to_csv(os.path.join(output_dir, "process_history.csv"), index=False)
     artifacts.engineer_feedback.to_csv(os.path.join(output_dir, "engineer_feedback.csv"), index=False)
     artifacts.ground_truth.to_csv(os.path.join(output_dir, "ground_truth.csv"), index=False)
+    artifacts.mediation.to_csv(os.path.join(output_dir, "mediation.csv"), index=False)
     _write_causal_edges(artifacts.causal_edges, os.path.join(output_dir, "causal_edges.csv"))
 
 
@@ -370,51 +376,90 @@ def _feature_value_stats(raw: pd.DataFrame, bad_wafers: set, feature_id: str) ->
     }
 
 
-def _build_causal_edges(feature_dictionary: pd.DataFrame, relation: pd.DataFrame) -> pd.DataFrame:
+def _build_causal_edges(
+    feature_dictionary: pd.DataFrame,
+    relation: pd.DataFrame,
+    mediation: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build the causal-edge graph, weighted by *measured* mediation when available.
+
+    Naming + `prc_metro_relation.csv` still seed the candidate edges (so the graph
+    never silently disappears on small N), but every root->mediator edge whose
+    association was measured carries `confidence = |pearson_r|` and the measured
+    columns (`pearson_r`, `indirect`, `prop_mediated`, `n`) with `evidence='measured'`.
+    Correlation-discovered pairs whose names did NOT match are added too. Unmeasured
+    edges fall back to the engineer metro_grade with `evidence='naming_only'`.
+    """
     grade_conf = {"A": 0.90, "B": 0.75, "C": 0.60, "D": 0.45}
+    measured_lookup = _mediation_lookup(mediation)
     fd = feature_dictionary.copy()
     roots = fd[fd["causal_role"] == "root_cause_candidate"]
     mediators = fd[fd["causal_role"] == "mediator_candidate"]
     rows: List[dict] = []
 
     connected_roots = set()
+    seeded_pairs = set()
     for _, med in mediators.iterrows():
         med_roots = roots[roots["process_step"] == med["process_step"]]
-        confidence = grade_conf.get(str(med.get("metro_grade", "")).upper(), 0.50)
+        grade_c = grade_conf.get(str(med.get("metro_grade", "")).upper(), 0.50)
         for _, root in med_roots.iterrows():
-            rows.append(
-                {
-                    "source_feature": root["feature_id"],
-                    "target_feature": med["feature_id"],
-                    "relation": "physicallyAffects",
-                    "confidence": confidence,
-                }
-            )
+            pair = (root["feature_id"], med["feature_id"])
+            seeded_pairs.add(pair)
+            rows.append(_physically_affects_edge(pair, grade_c, measured_lookup.get(pair)))
             connected_roots.add(root["feature_id"])
-        rows.append(
-            {
-                "source_feature": med["feature_id"],
-                "target_feature": TARGET_ID,
-                "relation": "mediates",
-                "confidence": confidence,
-            }
-        )
+        rows.append(_simple_edge(med["feature_id"], TARGET_ID, "mediates", grade_c))
+
+    # Correlation-discovered root->mediator links whose names did not match.
+    for pair, stat in measured_lookup.items():
+        if pair in seeded_pairs or bool(stat.get("seeded", False)):
+            continue
+        rows.append(_physically_affects_edge(pair, float("nan"), stat))
+        connected_roots.add(pair[0])
 
     for _, root in roots.iterrows():
         if root["feature_id"] not in connected_roots:
-            rows.append(
-                {
-                    "source_feature": root["feature_id"],
-                    "target_feature": TARGET_ID,
-                    "relation": "triggers",
-                    "confidence": 0.40,
-                }
-            )
+            rows.append(_simple_edge(root["feature_id"], TARGET_ID, "triggers", 0.40))
 
     if not rows:
-        rows.append({"source_feature": "unknown", "target_feature": TARGET_ID, "relation": "unknown", "confidence": 0.0})
+        rows.append(_simple_edge("unknown", TARGET_ID, "unknown", 0.0))
     edges = pd.DataFrame(rows)
-    return edges.drop_duplicates().reset_index(drop=True)
+    return edges.drop_duplicates(subset=["source_feature", "target_feature", "relation"]).reset_index(drop=True)
+
+
+_EDGE_COLUMNS = [
+    "source_feature", "target_feature", "relation", "confidence",
+    "pearson_r", "indirect", "prop_mediated", "n", "evidence",
+]
+
+
+def _simple_edge(source: str, target: str, relation: str, confidence: float) -> dict:
+    return {
+        "source_feature": source, "target_feature": target, "relation": relation,
+        "confidence": confidence, "pearson_r": np.nan, "indirect": np.nan,
+        "prop_mediated": np.nan, "n": np.nan, "evidence": "naming_only",
+    }
+
+
+def _physically_affects_edge(pair: tuple, grade_conf: float, stat: dict | None) -> dict:
+    source, target = pair
+    if stat is None:
+        edge = _simple_edge(source, target, "physicallyAffects", grade_conf)
+        return edge
+    return {
+        "source_feature": source, "target_feature": target, "relation": "physicallyAffects",
+        "confidence": round(abs(float(stat["a"])), 4),
+        "pearson_r": round(float(stat["a"]), 4),
+        "indirect": round(float(stat["indirect"]), 4) if np.isfinite(stat["indirect"]) else np.nan,
+        "prop_mediated": round(float(stat["prop_mediated"]), 4) if np.isfinite(stat["prop_mediated"]) else np.nan,
+        "n": int(stat["n"]),
+        "evidence": "measured",
+    }
+
+
+def _mediation_lookup(mediation: pd.DataFrame | None) -> dict:
+    if mediation is None or mediation.empty:
+        return {}
+    return {(row["root"], row["mediator"]): row.to_dict() for _, row in mediation.iterrows()}
 
 
 def _build_process_history(raw: pd.DataFrame) -> pd.DataFrame:

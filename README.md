@@ -59,8 +59,9 @@ num|prc_step|erd|sensor구분|sensor아이템|sensor구분2
 | `data/target.csv` | `target`을 `defect_rate`로 변환하고 `bad_flag` 생성 |
 | `data/shap_values.csv` | bad wafer 평균 SHAP 표준 테이블 |
 | `data/feature_dictionary.csv` | feature metadata, causal role, leakage flag |
-| `data/causal_edges.csv` | ontology graph seed |
-| `outputs/hypothesis_cards.csv` | causal hypothesis card |
+| `data/causal_edges.csv` | ontology graph (root→metro→target), 측정된 `pearson_r`·`indirect`로 가중 |
+| `data/mediation.csv` | raw_data로 측정한 root→metro→target 매개효과 (a, b, indirect, %매개, p, 층화 안정성) |
+| `outputs/hypothesis_cards.csv` | causal hypothesis card (측정 컬럼 포함) |
 | `outputs/ontology_level_shap_summary.csv` | role/process/mechanism 기준 SHAP 집계 |
 | `outputs/report.md` | 공유용 분석 report |
 

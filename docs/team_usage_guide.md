@@ -1,5 +1,57 @@
 # Team Usage Guide: Ontology SHAP 분석
 
+## 0. 빠른 시작 — 설치와 실행 순서
+
+처음 쓰는 팀원은 이 순서만 따라가면 됩니다. 코드 파일을 차례로 실행할 필요 없이 **진입점은 `run_demo.py` 하나**입니다.
+
+### 0-1. 1회 설치
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 0-2. 실제 데이터 넣기
+
+`input/` 폴더에 아래 파일을 둡니다 (형식은 4장 참고).
+
+```text
+input/raw_data.csv                # 필수 — wafer별 원천값 + target
+input/x_feature_shap_value.csv    # 필수 — feature별 bad wafer 평균 SHAP
+input/prc_metro_relation.csv      # 필수 — 공정-계측 관계 seed
+input/bad_wafers.csv              # 권장 — SHAP 계산에 쓴 bad wafer cohort
+```
+
+### 0-3. 분석 실행 (한 줄)
+
+```bash
+python3 run_demo.py --mode real --input-dir input --bad-quantile 0.80
+```
+
+이 한 줄이 내부적으로 순서대로 수행합니다.
+
+1. `src/real_dataset_adapter.py` — input 3종을 표준 `data/*.csv`로 변환하고, **raw_data의 wafer별 값으로 root→metro→target 매개효과를 측정**해 `data/mediation.csv`·`data/causal_edges.csv`를 만듭니다.
+2. `src/pipeline.py` → `src/hypothesis_engine.py` — 측정값 기준으로 hypothesis card와 grade를 만들어 `outputs/`에 저장합니다.
+3. `src/reporting.py` — `outputs/report.md`를 작성합니다.
+
+### 0-4. 결과 확인
+
+```text
+outputs/report.md                      # 공유용 요약 (여기부터 읽기)
+outputs/hypothesis_cards.csv           # 카드 원본 (측정 컬럼 포함)
+outputs/ontology_level_shap_summary.csv
+data/mediation.csv                     # 측정된 매개효과 원본 (a, b, indirect, %매개, p, 층화 안정성)
+```
+
+### 0-5. 대시보드 (선택)
+
+```bash
+streamlit run app.py
+```
+
+> 형식만 먼저 보고 싶으면 데이터 없이 `python3 run_demo.py --mode virtual` 로 가상 데이터를 생성·분석해 산출물 형식을 확인할 수 있습니다.
+
 ## 1. 평가 컨셉
 
 이 프로젝트의 목적은 bad wafer 기준 평균 SHAP ranking을 그대로 원인으로 확정하지 않고, 공정 ontology를 이용해 검증 가능한 causal hypothesis로 바꾸는 것입니다.
@@ -168,6 +220,22 @@ subitem_id= AVG
 metro_grade= A
 ```
 
+## 4.5 측정된 인과 사슬 조건 (measured vs naming_only)
+
+이번 버전은 인과 엣지를 feature 이름으로 '단정'하지 않고, raw_data의 wafer별 값으로 root→metro→target 매개효과를 **측정**합니다. 카드의 `evidence_basis`가 두 가지로 나옵니다.
+
+- `measured`: 매개효과를 데이터로 측정했고 `r`, `indirect a·b`, `% 매개`, `p`가 카드/리포트에 표기됩니다. (원하는 "센서 → thk/cd → 불량률" 형태의 측정된 사슬)
+- `naming_only`: 측정이 불가능해 이름 기반 엣지로 fallback한 경우. 측정 숫자가 없습니다.
+
+`measured`로 나오게 하려면:
+
+1. **root·mediator feature의 wafer별 수치가 `raw_data.csv`에 컬럼으로 들어 있어야 합니다.** SHAP 파일은 feature별 평균 한 줄이라 측정에 못 쓰고, 측정은 raw_data의 per-wafer 값으로 합니다.
+2. **wafer 수가 충분해야 합니다** (기본 최소 30, `src/causal_evidence.py`의 `DEFAULT_MIN_N`). 너무 적으면 naming_only로 떨어집니다.
+3. **root feature와 metro(mediator) feature가 실제로 상관**이 있어야 측정 엣지가 생깁니다. 이름의 `prc_step`이 달라도 상관이 강하면(기본 |r|≥0.30, `DISCOVERY_R`) 자동으로 엣지를 찾습니다.
+4. **target은 숫자**여야 하고 "클수록 나쁨" 방향이어야 합니다. 아니면 `bad_wafers.csv`로 bad cohort를 직접 지정합니다.
+
+`data/mediation.csv`를 열면 root→mediator 쌍별 측정값(a, b, indirect, prop_mediated, p, strata_stable)을 직접 볼 수 있습니다. 비어 있으면 위 1~4 중 하나가 충족되지 않은 것입니다.
+
 ## 5. 산출물 읽는 법
 
 ### outputs/report.md
@@ -177,7 +245,7 @@ metro_grade= A
 1. Dataset Summary: wafer 수, bad wafer 수, SHAP feature 수
 2. Bad wafer cohort SHAP: bad wafer 평균 SHAP 상위 feature
 3. Ontology-level Summary: causal role, process step, mechanism group별 집계
-4. Causal Hypothesis Cards: root-cause candidate, mediator, 권장 검증
+4. Causal Hypothesis Cards: 측정된 evidence path(`root ↑ → metro (r=..) → 불량률 (a·b=.., %매개, p=..)`), root-cause candidate, mediator, 권장 검증
 
 ### outputs/hypothesis_cards.csv
 
@@ -188,7 +256,12 @@ metro_grade= A
 | `root_cause_candidate_features` | ontology가 upstream으로 추적한 원인 후보 |
 | `mediator_candidate_features` | SHAP 상위에 등장한 증상/계측 후보 |
 | `excluded_leakage_features` | target proxy로 판단되어 제외한 feature |
-| `hypothesis_grade` | A/B/C/X 등급. X는 leakage 제외 카드 |
+| `hypothesis_grade` | A/B/C/X 등급. 측정된 indirect effect·유의성·층화 안정성 기준. X는 leakage |
+| `evidence_basis` | `measured`(데이터로 측정) 또는 `naming_only`(이름 fallback) |
+| `measured_indirect_effect` | 측정된 매개효과 a·b (표준화) |
+| `measured_prop_mediated` | 전체효과 중 매개 비율 |
+| `measured_indirect_p` | 매개효과 유의확률 (Sobel, 정규근사) |
+| `strata_stable` | chamber/PPID 층화 시 사슬이 유지되는지 (Simpson 가드) |
 | `recommended_validation` | 엔지니어 검증 action |
 
 ## 6. 결과 해석 시 주의사항

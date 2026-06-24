@@ -120,7 +120,8 @@ st.plotly_chart(viz.shap_aggregation_bar(agg, group_col), width="stretch")
 # ── 8. 인과 가설 카드 ────────────────────────────────────────────────────────
 st.subheader("6) 인과 가설 카드 (causal hypothesis cards)")
 cards = build_hypothesis_cards(
-    mapped, target, data["process_history"], data["causal_edges"], feature_dict, top_n=5
+    mapped, target, data["process_history"], data["causal_edges"], feature_dict,
+    top_n=5, mediation_df=data.get("mediation"),
 )
 for _, card in cards.iterrows():
     grade = card["hypothesis_grade"]
@@ -132,6 +133,14 @@ for _, card in cards.iterrows():
             unsafe_allow_html=True,
         )
         st.markdown(f"**증거 경로(evidence path):** {card['evidence_path_text']}")
+        if str(card.get("evidence_basis", "")) == "measured":
+            st.markdown(
+                f"**측정된 인과(measured):** indirect a·b=`{card.get('measured_indirect_effect', '')}` · "
+                f"% mediated=`{card.get('measured_prop_mediated', '')}` · "
+                f"p=`{card.get('measured_indirect_p', '')}` · "
+                f"strata_stable=`{card.get('strata_stable', '')}` "
+                "— SHAP 순위가 아니라 raw 데이터로 측정된 인과 사슬입니다."
+            )
         st.plotly_chart(viz.evidence_path_figure(card["evidence_path_text"]),
                         width="stretch", key=f"path_{card['hypothesis_id']}")
         g1, g2, g3 = st.columns(3)
