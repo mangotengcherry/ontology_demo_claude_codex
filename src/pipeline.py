@@ -25,6 +25,7 @@ def run_analysis(data_dir: str = "data", output_dir: str = "outputs") -> Dict:
         data["causal_edges"],
         data["feature_dictionary"],
         top_n=5,
+        mediation_df=data.get("mediation"),
     )
     bad_wafers = data["target"].loc[data["target"]["bad_flag"] == 1, "wafer_id"].tolist()
     ontology_summary = _ontology_summary(mapped, bad_wafers)

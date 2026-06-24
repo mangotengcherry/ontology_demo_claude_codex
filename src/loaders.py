@@ -39,4 +39,9 @@ def load_all_data(data_dir: str = "data") -> Dict[str, pd.DataFrame]:
     pred_path = os.path.join(data_dir, "model_predictions.csv")
     if os.path.exists(pred_path):
         data["model_predictions"] = pd.read_csv(pred_path)
+
+    # Optional measured-mediation evidence (built by the real-dataset adapter).
+    med_path = os.path.join(data_dir, "mediation.csv")
+    if os.path.exists(med_path):
+        data["mediation"] = pd.read_csv(med_path)
     return data
