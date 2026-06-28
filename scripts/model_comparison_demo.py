@@ -179,143 +179,74 @@ def _r2(y_true, y_pred) -> float:
     return float(r2_score(y_true, y_pred))
 
 
-def block_performance(ds: Dataset, iterations: int, seed: int) -> Dict[str, object]:
+@dataclass(frozen=True)
+class Results:
+    """Everything computed once, so CLI / viz / notebook share one code path."""
+    source: str
+    n_wafers: int
+    n_features: int
+    roles_count: Dict[str, int]
+    performance: pd.DataFrame     # arm, depth, train_r2, test_r2, gap
+    flat_feat: pd.DataFrame       # feature, mean_abs_shap, role, pct
+    onto_feat: pd.DataFrame
+    onto_roll: pd.DataFrame       # role, mean_abs_shap, pct
+    mediation: pd.DataFrame
+    credit: pd.DataFrame
+    learning_curve: pd.DataFrame  # n, flat_r2, onto_r2, delta
+    monotone: Dict[str, int]
+
+
+def compute_results(ds: Dataset, iterations: int, seed: int, k_repeats: int = 5) -> Results:
+    """Train all arms ONCE, compute SHAP, mediation views, credit, learning curve."""
     idx = np.arange(len(ds.X))
     tr, te = train_test_split(idx, test_size=0.25, random_state=seed)
 
-    # Flat: everything (incl. leakage), deep.
     flat_cols, flat_cats = select_columns(ds, drop_leakage=False)
-    p_tr, p_te, _ = fit_predict(ds.X.iloc[tr][flat_cols], ds.y.iloc[tr], ds.X.iloc[te][flat_cols],
-                                flat_cats, FLAT_DEPTH, iterations, seed)
-    flat = (_r2(ds.y.iloc[tr], p_tr), _r2(ds.y.iloc[te], p_te))
-
-    # Flat ablation: same deep model but leakage removed by hand (proves the gap IS leakage).
     nl_cols, nl_cats = select_columns(ds, drop_leakage=True)
-    p_tr2, p_te2, _ = fit_predict(ds.X.iloc[tr][nl_cols], ds.y.iloc[tr], ds.X.iloc[te][nl_cols],
-                                  nl_cats, FLAT_DEPTH, iterations, seed)
-    flat_nl = (_r2(ds.y.iloc[tr], p_tr2), _r2(ds.y.iloc[te], p_te2))
-
-    # Ontology: leakage dropped by causal role, shallow, A-grade monotone priors.
     mono = monotone_map(ds, nl_cols, ds.X.iloc[tr][nl_cols], ds.y.iloc[tr])
-    p_tr3, p_te3, onto_model = fit_predict(ds.X.iloc[tr][nl_cols], ds.y.iloc[tr], ds.X.iloc[te][nl_cols],
-                                           nl_cats, ONTO_DEPTH, iterations, seed, monotone=mono)
-    onto = (_r2(ds.y.iloc[tr], p_tr3), _r2(ds.y.iloc[te], p_te3))
 
-    print(SEP)
-    print("1) PERFORMANCE  (regression R^2 on a held-out 25% split; identical seed/iterations)")
-    print(SEP)
-    print(f"{'arm':<42}{'depth':>6}{'train R2':>11}{'test R2':>10}{'gap':>8}")
-    print(f"{'flat (all features, incl. leakage)':<42}{FLAT_DEPTH:>6}{flat[0]:>11.3f}{flat[1]:>10.3f}{flat[0]-flat[1]:>8.3f}")
-    print(f"{'flat ablation (leakage removed by hand)':<42}{FLAT_DEPTH:>6}{flat_nl[0]:>11.3f}{flat_nl[1]:>10.3f}{flat_nl[0]-flat_nl[1]:>8.3f}")
-    print(f"{'ontology (role-filtered + shallow)':<42}{ONTO_DEPTH:>6}{onto[0]:>11.3f}{onto[1]:>10.3f}{onto[0]-onto[1]:>8.3f}")
-    print()
-    print(f"  -> flat's test R2 ({flat[1]:.3f}) is inflated by the post-outcome proxy; remove it")
-    print(f"     and the honest ceiling is ~{flat_nl[1]:.3f}. Ontology reaches that ceiling AUTOMATICALLY")
-    print(f"     via causal role, and the monotone A-grade prior is shown in ATTRIBUTION below.")
-    if mono:
-        print(f"  -> A-grade monotone priors applied to: {', '.join(mono.keys())}")
-    return {"flat": flat, "flat_nl": flat_nl, "onto": onto, "tr": tr, "te": te,
-            "nl_cols": nl_cols, "nl_cats": nl_cats, "mono": mono, "onto_model": onto_model,
-            "flat_cols": flat_cols, "flat_cats": flat_cats}
+    # Flat (incl. leakage, deep), flat ablation (leakage removed by hand), ontology.
+    ptr_f, pte_f, flat_model = fit_predict(ds.X.iloc[tr][flat_cols], ds.y.iloc[tr],
+                                           ds.X.iloc[te][flat_cols], flat_cats, FLAT_DEPTH, iterations, seed)
+    ptr_a, pte_a, _ = fit_predict(ds.X.iloc[tr][nl_cols], ds.y.iloc[tr],
+                                  ds.X.iloc[te][nl_cols], nl_cats, FLAT_DEPTH, iterations, seed)
+    ptr_o, pte_o, onto_model = fit_predict(ds.X.iloc[tr][nl_cols], ds.y.iloc[tr],
+                                           ds.X.iloc[te][nl_cols], nl_cats, ONTO_DEPTH, iterations, seed, monotone=mono)
 
+    def _row(arm, depth, ptr, pte):
+        a, b = _r2(ds.y.iloc[tr], ptr), _r2(ds.y.iloc[te], pte)
+        return {"arm": arm, "depth": depth, "train_r2": a, "test_r2": b, "gap": a - b}
 
-def block_attribution(ds: Dataset, ctx: Dict[str, object], iterations: int, seed: int) -> None:
-    tr, te = ctx["tr"], ctx["te"]
-    # Flat model SHAP (leakage present) vs ontology model SHAP.
-    _, _, flat_model = fit_predict(ds.X.iloc[tr][ctx["flat_cols"]], ds.y.iloc[tr],
-                                   ds.X.iloc[te][ctx["flat_cols"]], ctx["flat_cats"],
-                                   FLAT_DEPTH, iterations, seed)
-    flat_feat, _ = shap_rollup(flat_model, ds.X.iloc[te][ctx["flat_cols"]], ctx["flat_cats"], ds.roles)
-    onto_feat, onto_roll = shap_rollup(ctx["onto_model"], ds.X.iloc[te][ctx["nl_cols"]],
-                                       ctx["nl_cats"], ds.roles)
+    performance = pd.DataFrame([
+        _row("flat (all features, incl. leakage)", FLAT_DEPTH, ptr_f, pte_f),
+        _row("flat ablation (leakage removed by hand)", FLAT_DEPTH, ptr_a, pte_a),
+        _row("ontology (role-filtered + shallow)", ONTO_DEPTH, ptr_o, pte_o),
+    ])
 
-    print()
-    print(SEP)
-    print("2) ATTRIBUTION  (top features by mean|SHAP| on the held-out fold)")
-    print(SEP)
-    print("  FLAT model -- points at the symptom / leakage:")
-    for _, r in flat_feat.head(5).iterrows():
-        print(f"    {r['pct']:>5.1f}%  [{r['role']:<22}] {r['feature']}")
-    print("  ONTOLOGY model -- leakage gone; credit flows to root/mediator/process:")
-    for _, r in onto_feat.head(5).iterrows():
-        print(f"    {r['pct']:>5.1f}%  [{r['role']:<22}] {r['feature']}")
+    flat_feat, _ = shap_rollup(flat_model, ds.X.iloc[te][flat_cols], flat_cats, ds.roles)
+    onto_feat, onto_roll = shap_rollup(onto_model, ds.X.iloc[te][nl_cols], nl_cats, ds.roles)
 
-    print()
-    print(SEP)
-    print("3) ONTOLOGY-LEVEL SHAP ROLL-UP  (ontology model SHAP grouped by causal role)")
-    print(SEP)
-    for _, r in onto_roll.iterrows():
-        print(f"    {r['pct']:>5.1f}%  {r['role']}")
-    controllable = onto_roll[onto_roll["role"].isin(["root_cause_candidate"])]["pct"].sum()
-    print(f"  -> {controllable:.1f}% of attribution sits on controllable root candidates (a knob),")
-    print(f"     not on the metrology symptom alone.")
-
-    # Credit-absorption diagnostic: measured root indirect effect vs model SHAP share.
     share = {row["feature"]: row["pct"] / 100.0 for _, row in onto_feat.iterrows()}
-    ca = credit_absorption(ds.mediation, share)
-    flagged = ca[ca["credit_absorbed"]]
-    if not flagged.empty:
-        print()
-        print("  CREDIT ABSORPTION (why a plain SHAP ranking misses the cause):")
-        for _, r in flagged.iterrows():
-            print(f"    root {r['root']}")
-            print(f"      measured indirect={r['indirect']:.2f} but model SHAP share "
-                  f"{r['root_shap_share']*100:.1f}% < mediator {r['mediator_shap_share']*100:.1f}%"
-                  f"  -> mediator absorbed the credit")
+    credit = credit_absorption(ds.mediation, share)
+
+    learning_curve = _learning_curve(ds, iterations, seed, k_repeats)
+
+    return Results(
+        source=ds.source, n_wafers=len(ds.X), n_features=ds.X.shape[1],
+        roles_count=dict(pd.Series(ds.roles).value_counts()),
+        performance=performance, flat_feat=flat_feat, onto_feat=onto_feat, onto_roll=onto_roll,
+        mediation=ds.mediation, credit=credit, learning_curve=learning_curve, monotone=mono,
+    )
 
 
-def block_chain(ds: Dataset) -> None:
-    print()
-    print(SEP)
-    print("4) MEASURED CAUSAL CHAIN  (data-measured mediation: root -> mediator -> target)")
-    print(SEP)
-    med = ds.mediation
-    if med is None or med.empty:
-        print("    (no measured chain -- see diagnosis checklist: naming exceptions / N<min / collinearity)")
-        return
-    keep = med.sort_values("indirect", key=lambda s: s.abs(), ascending=False)
-    for _, r in keep.iterrows():
-        prop = r["prop_mediated"]
-        prop_s = f"{prop*100:.0f}%" if np.isfinite(prop) else "n/a"
-        flags = []
-        if not r.get("sign_consistent", False):
-            flags.append("SIGN-INCONSISTENT")
-        if r.get("unstable", False):
-            flags.append("COLLINEAR/UNSTABLE")
-        if not r.get("strata_stable", True):
-            flags.append("SIMPSON-WARN")
-        if np.isfinite(prop) and prop > 1.0:
-            flags.append("prop>100%(suppression/noise)")
-        if not r.get("bh_reject", True):
-            flags.append("not BH-FDR significant")
-        if r.get("nonlinear_b", False):
-            flags.append(f"NONLINEAR b-path (lin indirect underestimates; |effect|~{r['nl_indirect_mag']:.2f})")
-        tag = ("  [" + ", ".join(flags) + "]") if flags else ""
-        q = r.get("indirect_q", float("nan"))
-        print(f"    {r['root']}")
-        print(f"      -> {r['mediator']}  (a={r['a']:.2f}, b={r['b']:.2f}, "
-              f"indirect a*b={r['indirect']:.2f}, ~{prop_s} mediated, p={r['indirect_p']:.3g}, "
-              f"q={q:.3g}, n={int(r['n'])}){tag}")
-
-
-def block_learning_curve(ds: Dataset, iterations: int, seed: int, k_repeats: int = 5) -> None:
-    """Isolate the inductive-bias lever: BOTH arms leakage-free; only depth differs.
-
-    Leakage win (#1) is already shown above; here we hold leakage out of both arms so
-    the curve measures only the semantic layer's shallow-depth / monotone bias.
-    """
+def _learning_curve(ds: Dataset, iterations: int, seed: int, k_repeats: int) -> pd.DataFrame:
+    """Isolate the inductive-bias lever: BOTH arms leakage-free; only depth differs."""
     cols, cats = select_columns(ds, drop_leakage=True)
     idx = np.arange(len(ds.X))
     tr_pool, te = train_test_split(idx, test_size=0.30, random_state=seed)
-    fracs = [0.10, 0.20, 0.40, 0.70, 1.0]
     rng = np.random.default_rng(seed)
-
-    print()
-    print(SEP)
-    print("5) LEARNING CURVE  (both arms leakage-free; flat depth=8 vs ontology depth=4)")
-    print(SEP)
-    print(f"{'train N':>8}{'flat test R2':>15}{'onto test R2':>15}{'onto - flat':>14}")
-    for f in fracs:
+    rows = []
+    for f in [0.10, 0.20, 0.40, 0.70, 1.0]:
         n = max(ONTO_DEPTH * 4, int(len(tr_pool) * f))
         flat_scores, onto_scores = [], []
         for rep in range(k_repeats):
@@ -326,32 +257,124 @@ def block_learning_curve(ds: Dataset, iterations: int, seed: int, k_repeats: int
             _, po, _ = fit_predict(Xs[cols], ys, ds.X.iloc[te][cols], cats, ONTO_DEPTH, iterations, seed + rep, monotone=mono)
             flat_scores.append(_r2(ds.y.iloc[te], pf))
             onto_scores.append(_r2(ds.y.iloc[te], po))
-        fm, om = np.mean(flat_scores), np.mean(onto_scores)
-        flag = "  <- ontology wins" if om > fm else ""
-        print(f"{n:>8}{fm:>15.3f}{om:>15.3f}{om-fm:>14.3f}{flag}")
+        fm, om = float(np.mean(flat_scores)), float(np.mean(onto_scores))
+        rows.append({"n": min(n, len(tr_pool)), "flat_r2": fm, "onto_r2": om, "delta": om - fm})
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------------------
+# Console presentation (consumes Results)
+# --------------------------------------------------------------------------------------
+def print_report(res: Results) -> None:
+    print(SEP)
+    print(f"ONTOLOGY x YIELD  --  flat vs ontology CatBoost   [data source: {res.source}]")
+    print(f"  wafers={res.n_wafers}  features={res.n_features}")
+    print("  roles: " + ", ".join(f"{k}={v}" for k, v in res.roles_count.items()))
+
+    print(SEP)
+    print("1) PERFORMANCE  (regression R^2 on a held-out 25% split; identical seed/iterations)")
+    print(SEP)
+    print(f"{'arm':<42}{'depth':>6}{'train R2':>11}{'test R2':>10}{'gap':>8}")
+    for _, r in res.performance.iterrows():
+        print(f"{r['arm']:<42}{int(r['depth']):>6}{r['train_r2']:>11.3f}{r['test_r2']:>10.3f}{r['gap']:>8.3f}")
+    flat_te = res.performance.iloc[0]["test_r2"]
+    ceil_te = res.performance.iloc[1]["test_r2"]
+    print()
+    print(f"  -> flat's test R2 ({flat_te:.3f}) is inflated by the post-outcome proxy; remove it")
+    print(f"     and the honest ceiling is ~{ceil_te:.3f}. Ontology reaches that ceiling AUTOMATICALLY via causal role.")
+    if res.monotone:
+        print(f"  -> A-grade monotone priors applied to: {', '.join(res.monotone.keys())}")
+
+    print()
+    print(SEP)
+    print("2) ATTRIBUTION  (top features by mean|SHAP| on the held-out fold)")
+    print(SEP)
+    print("  FLAT model -- points at the symptom / leakage:")
+    for _, r in res.flat_feat.head(5).iterrows():
+        print(f"    {r['pct']:>5.1f}%  [{r['role']:<22}] {r['feature']}")
+    print("  ONTOLOGY model -- leakage gone; credit flows to root/mediator/process:")
+    for _, r in res.onto_feat.head(5).iterrows():
+        print(f"    {r['pct']:>5.1f}%  [{r['role']:<22}] {r['feature']}")
+
+    print()
+    print(SEP)
+    print("3) ONTOLOGY-LEVEL SHAP ROLL-UP  (ontology model SHAP grouped by causal role)")
+    print(SEP)
+    for _, r in res.onto_roll.iterrows():
+        print(f"    {r['pct']:>5.1f}%  {r['role']}")
+    controllable = res.onto_roll[res.onto_roll["role"] == "root_cause_candidate"]["pct"].sum()
+    print(f"  -> {controllable:.1f}% of attribution sits on controllable root candidates (a knob).")
+
+    flagged = res.credit[res.credit["credit_absorbed"]]
+    if not flagged.empty:
+        print()
+        print("  CREDIT ABSORPTION (why a plain SHAP ranking misses the cause):")
+        for _, r in flagged.iterrows():
+            print(f"    root {r['root']}: measured indirect={r['indirect']:.2f} but model SHAP "
+                  f"{r['root_shap_share']*100:.1f}% < mediator {r['mediator_shap_share']*100:.1f}%")
+
+    print()
+    print(SEP)
+    print("4) MEASURED CAUSAL CHAIN  (data-measured mediation: root -> mediator -> target)")
+    print(SEP)
+    if res.mediation is None or res.mediation.empty:
+        print("    (no measured chain -- see diagnosis checklist: naming exceptions / N<min / collinearity)")
+    else:
+        for _, r in res.mediation.sort_values("indirect", key=lambda s: s.abs(), ascending=False).iterrows():
+            prop = r["prop_mediated"]
+            prop_s = f"{prop*100:.0f}%" if np.isfinite(prop) else "n/a"
+            flags = []
+            if not r.get("sign_consistent", False):
+                flags.append("SIGN-INCONSISTENT")
+            if r.get("unstable", False):
+                flags.append("COLLINEAR/UNSTABLE")
+            if not r.get("strata_stable", True):
+                flags.append("SIMPSON-WARN")
+            if np.isfinite(prop) and prop > 1.0:
+                flags.append("prop>100%(suppression/noise)")
+            if not r.get("bh_reject", True):
+                flags.append("not BH-FDR significant")
+            if r.get("nonlinear_b", False):
+                flags.append(f"NONLINEAR b-path (|effect|~{r['nl_indirect_mag']:.2f})")
+            tag = ("  [" + ", ".join(flags) + "]") if flags else ""
+            print(f"    {r['root']}")
+            print(f"      -> {r['mediator']}  (a={r['a']:.2f}, b={r['b']:.2f}, "
+                  f"indirect a*b={r['indirect']:.2f}, ~{prop_s} mediated, p={r['indirect_p']:.3g}, "
+                  f"q={r.get('indirect_q', float('nan')):.3g}, n={int(r['n'])}){tag}")
+
+    print()
+    print(SEP)
+    print("5) LEARNING CURVE  (both arms leakage-free; flat depth=8 vs ontology depth=4)")
+    print(SEP)
+    print(f"{'train N':>8}{'flat test R2':>15}{'onto test R2':>15}{'onto - flat':>14}")
+    for _, r in res.learning_curve.iterrows():
+        flag = "  <- ontology wins" if r["delta"] > 0 else ""
+        print(f"{int(r['n']):>8}{r['flat_r2']:>15.3f}{r['onto_r2']:>15.3f}{r['delta']:>14.3f}{flag}")
     print("  -> the shallow semantic prior pays off most when N is small (new product / rare BIN).")
     print("     At large N the gap closes -- we do NOT claim a large-N accuracy win.")
 
 
 # --------------------------------------------------------------------------------------
 def run(input_dir: str = "input", bad_quantile: float = 0.80, iterations: int = 300,
-        seed: int = 42, n_wafers: int = 250) -> None:
-    """Run all five performance-arm blocks. Reusable from run_demo.py."""
+        seed: int = 42, n_wafers: int = 250, save_charts_to: Optional[str] = None) -> Results:
+    """Compute the performance arm, print the five blocks, optionally save charts."""
     ds = load_dataset(input_dir, bad_quantile, n_wafers, seed)
-    print(SEP)
-    print(f"ONTOLOGY x YIELD  --  flat vs ontology CatBoost   [data source: {ds.source}]")
-    print(f"  wafers={len(ds.X)}  features={ds.X.shape[1]}  categorical={len(ds.cat_features)}")
-    print(f"  roles: " + ", ".join(f"{k}={v}" for k, v in
-          pd.Series(ds.roles).value_counts().items()))
-
-    ctx = block_performance(ds, iterations, seed)
-    block_attribution(ds, ctx, iterations, seed)
-    block_chain(ds)
-    block_learning_curve(ds, iterations, seed)
+    res = compute_results(ds, iterations, seed)
+    print_report(res)
+    if save_charts_to:
+        from src.model_comparison_viz import save_all  # local import keeps matplotlib optional
+        paths = save_all(res, save_charts_to)
+        print()
+        print(SEP)
+        print(f"charts saved to {save_charts_to}/ :")
+        for p in paths:
+            print(f"  {p}")
+        print(SEP)
     print()
     print(SEP)
     print("Read the three robust wins in docs/model_comparison_findings.md before presenting.")
     print(SEP)
+    return res
 
 
 def main() -> None:
@@ -361,8 +384,11 @@ def main() -> None:
     ap.add_argument("--iterations", type=int, default=300)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--n-wafers", type=int, default=250, help="virtual-data size when input is absent")
+    ap.add_argument("--save-charts", metavar="DIR", default=None,
+                    help="also render the five blocks as PNG charts into DIR (e.g. outputs/charts)")
     args = ap.parse_args()
-    run(args.input_dir, args.bad_quantile, args.iterations, args.seed, args.n_wafers)
+    run(args.input_dir, args.bad_quantile, args.iterations, args.seed, args.n_wafers,
+        save_charts_to=args.save_charts)
 
 
 if __name__ == "__main__":

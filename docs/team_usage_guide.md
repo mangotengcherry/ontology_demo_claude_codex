@@ -62,9 +62,16 @@ CHAIN/LEARNING CURVE)으로 보여줍니다.
 # 단독 실행 (input 3종이 없으면 가상데이터 자동 생성)
 python3 scripts/model_comparison_demo.py --input-dir input
 
+# 시각화까지 PNG 로 저장 (5블록 + 인과사슬 + credit absorption 차트)
+python3 scripts/model_comparison_demo.py --input-dir input --save-charts outputs/charts
+
 # 해석 run 뒤에 이어서 실행
 python3 run_demo.py --mode real --input-dir input --with-model-comparison
 ```
+
+**노트북으로 분석:** `notebooks/model_comparison_scenario.ipynb` 를 열어 위에서부터 실행하면
+역할 분류·측정 사슬·5블록 차트·credit absorption 을 한 곳에서 본다. `input/` 에 실제 3종을
+넣고 `Restart & Run All` 하면 동일 셀이 실데이터로 채워진다(현재는 가상데이터 출력이 렌더링돼 있음).
 
 > **주의:** 주장은 "큰 N 정확도 향상"이 아니라 **누수 차단·저데이터 inductive bias·귀속이
 > 손잡이로** 세 가지 win 으로만 한다. 정직한 비-win 과 함께 `docs/model_comparison_findings.md`

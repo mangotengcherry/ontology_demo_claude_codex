@@ -58,6 +58,23 @@ class ModelComparisonTest(unittest.TestCase):
             self.assertEqual(str(self.ds.grades.get(feat, "")).upper(), "A")
             self.assertIn(mono[feat], (-1, 1))
 
+    def test_compute_results_and_figures(self):
+        res = mc.compute_results(self.ds, iterations=40, seed=7)
+        self.assertEqual(len(res.performance), 3)
+        self.assertEqual(len(res.learning_curve), 5)
+        # flat (incl. leakage) test R2 should beat the leakage-free ablation ceiling.
+        self.assertGreater(res.performance.iloc[0]["test_r2"], res.performance.iloc[1]["test_r2"])
+
+        from src.model_comparison_viz import all_figures, save_all
+        figs = all_figures(res)
+        self.assertEqual(set(figs), {"performance", "attribution", "ontology_rollup",
+                                     "learning_curve", "causal_chain", "credit_absorption"})
+        outdir = os.path.join(self._tmp, "charts")
+        paths = save_all(res, outdir)
+        self.assertEqual(len(paths), 6)
+        for p in paths:
+            self.assertTrue(os.path.exists(p) and os.path.getsize(p) > 0)
+
     def test_leakage_inflates_flat_r2(self):
         """Flat-with-leakage test R2 should exceed the leakage-free ceiling."""
         from sklearn.model_selection import train_test_split

@@ -2,6 +2,8 @@
 
 > 실행: `python3 scripts/model_comparison_demo.py --input-dir input`
 > (input 3종이 없으면 가상데이터를 자동 생성해 동일 파이프라인으로 검증한다.)
+> 시각화: `--save-charts outputs/charts` 로 6개 차트 PNG 저장, 또는
+> `notebooks/model_comparison_scenario.ipynb` 에서 인라인으로 본다.
 >
 > 이 문서는 **학습(②) 측면**의 정직한 결과와 한계다. 해석(①) 측면은
 > `docs/diagnosis_and_improvement_plan.md` + `src/causal_evidence.py` 를 본다.
