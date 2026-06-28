@@ -49,6 +49,7 @@ from src.real_dataset_adapter import (  # noqa: E402
     build_standard_dataset,
     input_files_exist,
 )
+from src.shap_diagnostics import credit_absorption  # noqa: E402
 from src.virtual_data_generator import generate_virtual_input_dataset  # noqa: E402
 
 warnings.filterwarnings("ignore")
@@ -249,6 +250,19 @@ def block_attribution(ds: Dataset, ctx: Dict[str, object], iterations: int, seed
     print(f"  -> {controllable:.1f}% of attribution sits on controllable root candidates (a knob),")
     print(f"     not on the metrology symptom alone.")
 
+    # Credit-absorption diagnostic: measured root indirect effect vs model SHAP share.
+    share = {row["feature"]: row["pct"] / 100.0 for _, row in onto_feat.iterrows()}
+    ca = credit_absorption(ds.mediation, share)
+    flagged = ca[ca["credit_absorbed"]]
+    if not flagged.empty:
+        print()
+        print("  CREDIT ABSORPTION (why a plain SHAP ranking misses the cause):")
+        for _, r in flagged.iterrows():
+            print(f"    root {r['root']}")
+            print(f"      measured indirect={r['indirect']:.2f} but model SHAP share "
+                  f"{r['root_shap_share']*100:.1f}% < mediator {r['mediator_shap_share']*100:.1f}%"
+                  f"  -> mediator absorbed the credit")
+
 
 def block_chain(ds: Dataset) -> None:
     print()
@@ -272,10 +286,16 @@ def block_chain(ds: Dataset) -> None:
             flags.append("SIMPSON-WARN")
         if np.isfinite(prop) and prop > 1.0:
             flags.append("prop>100%(suppression/noise)")
+        if not r.get("bh_reject", True):
+            flags.append("not BH-FDR significant")
+        if r.get("nonlinear_b", False):
+            flags.append(f"NONLINEAR b-path (lin indirect underestimates; |effect|~{r['nl_indirect_mag']:.2f})")
         tag = ("  [" + ", ".join(flags) + "]") if flags else ""
+        q = r.get("indirect_q", float("nan"))
         print(f"    {r['root']}")
         print(f"      -> {r['mediator']}  (a={r['a']:.2f}, b={r['b']:.2f}, "
-              f"indirect a*b={r['indirect']:.2f}, ~{prop_s} mediated, p={r['indirect_p']:.3g}, n={int(r['n'])}){tag}")
+              f"indirect a*b={r['indirect']:.2f}, ~{prop_s} mediated, p={r['indirect_p']:.3g}, "
+              f"q={q:.3g}, n={int(r['n'])}){tag}")
 
 
 def block_learning_curve(ds: Dataset, iterations: int, seed: int, k_repeats: int = 5) -> None:

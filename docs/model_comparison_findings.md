@@ -84,6 +84,17 @@ CVD RF_TIME_1          -> THK_EDGE  (a=0.55, b=0.90, indirect a*b=0.50, ~93% 매
 - ontology + mediation 은 **controllable root**(ERD PRESSURE_SLOPE)를 지목 → 엔지니어가 돌릴 수 있는 손잡이.
 - `ERD slope → metro THK (a·b≈0.80, ~92% 완전매개)`.
 
+CREDIT ABSORPTION (왜 plain SHAP 랭킹이 원인을 놓치는가 — 숫자로 증명):
+
+```
+root ERD PRESSURE_SLOPE: 측정 indirect=0.80 인데 모델 SHAP share 16.2% < mediator THK_EDGE 51.9%
+root CVD RF_TIME_1     : 측정 indirect=0.50 인데 모델 SHAP share  4.4% < mediator THK_EDGE 51.9%
+```
+
+- 다중공선성(root→mediator) 때문에 트리 모델이 **하류 mediator 에 credit 을 몰아준다.**
+  데이터 매개효과는 root 가 크지만 모델 SHAP 은 mediator 가 크다 = **credit 흡수**.
+- 이것이 실데이터에서 SHAP 랭킹이 무력했던 바로 그 이유. `src/shap_diagnostics.py` 의 `credit_absorption`.
+
 ---
 
 ## 3. 정직한 비-win (데모에서 먼저 말한다)
@@ -112,4 +123,6 @@ CVD RF_TIME_1          -> THK_EDGE  (a=0.55, b=0.90, indirect a*b=0.50, ~93% 매
 
 - 이 스크립트는 `run_demo.py`/`app.py` 와 아직 분리돼 있다(P2 통합 대상).
 - learning curve 는 가상데이터에서 검증됨. **실데이터 5블록 캡처는 사내에서 실행**해야 한다(실데이터 사외 반출 금지).
-- mediation 의 다중비교 보정(BH-FDR)·비선형 옵션·per-wafer SHAP 진단은 P1 에서 보강.
+- **P1 완료**: mediation 다중비교 보정(BH-FDR, `bh_fdr`/`indirect_q`/`bh_reject`)·비선형 b-path
+  플래그(`nonlinear_b`/`nl_indirect_mag`)·credit-absorption 진단(`src/shap_diagnostics.py`) 추가됨.
+  사슬 카드에 `q` 값과 `NONLINEAR b-path`/`not BH-FDR significant` 플래그로 표기된다.

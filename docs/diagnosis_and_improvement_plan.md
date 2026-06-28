@@ -7,6 +7,11 @@
 > 모두에서 `PRESSURE_SLOPE ↑ → THK_EDGE (r=0.94) → 불량률 (a·b=0.80, ~92% 매개, p≈0)` 형태의
 > 측정된 인과 사슬을 출력하며 Grade A로 등급. 테스트 15개 통과(`tests/test_causal_evidence.py` 포함).
 > P2(per-wafer/interaction SHAP 활용), P2b(data quality 리포트)는 다음 iteration 과제로 남김.
+>
+> **구현 상태 (2026-06 update):** 성능 arm(`scripts/model_comparison_demo.py` + `docs/model_comparison_findings.md`)
+> 신설 — flat vs ontology CatBoost 5블록(누수 차단/저N inductive bias/귀속 손잡이). P1 보강 완료:
+> BH-FDR 다중비교 보정(`bh_fdr`), 비선형 b-path 플래그(`nonlinear_b`/`nl_indirect_mag`),
+> credit-absorption 진단(`src/shap_diagnostics.py`, 모델 SHAP vs 측정 indirect 불일치). 테스트 26개 통과.
 
 ---
 

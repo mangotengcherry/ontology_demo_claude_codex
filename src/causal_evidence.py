@@ -24,12 +24,16 @@ DEFAULT_MIN_N = 30          # below this we refuse to assert a measured chain
 DISCOVERY_R = 0.30         # |pearson| to discover a non-name-matched root->mediator edge
 COLLINEARITY_D = 0.05      # 1 - r_RM^2 floor; below this the mediation is unstable
 MIN_STRATUM_N = 20
+NONLINEAR_GAIN = 0.05      # extra partial-R^2 from a quadratic b-path to flag non-linearity
+FDR_ALPHA = 0.05           # Benjamini-Hochberg level for the (root x mediator) sweep
 
 MEDIATION_COLUMNS = [
     "root", "mediator", "target", "n",
     "a", "b", "c_total", "c_direct", "indirect", "prop_mediated",
     "a_p", "indirect_p", "sign_consistent", "unstable",
     "seeded", "strata_stable", "strata_tested",
+    "nl_gain", "nl_indirect_mag", "nonlinear_b",
+    "indirect_q", "bh_reject",
 ]
 
 
@@ -66,6 +70,58 @@ def _slope_t(r: float, n: int) -> float:
     if abs(r) >= 1.0 or n <= 2:
         return float("inf") if r != 0 else 0.0
     return r * math.sqrt((n - 2) / (1 - r * r))
+
+
+def bh_fdr(pvals: np.ndarray, alpha: float = FDR_ALPHA) -> tuple:
+    """Benjamini-Hochberg FDR. Returns (q_values, reject) aligned to input order.
+
+    NaN p-values pass through as NaN q (not counted in the m of BH). numpy only.
+    """
+    p = np.asarray(pvals, dtype=float)
+    q = np.full(p.shape, np.nan)
+    finite = np.where(np.isfinite(p))[0]
+    m = len(finite)
+    if m == 0:
+        return q, np.zeros(p.shape, dtype=bool)
+    order = finite[np.argsort(p[finite])]
+    ranked = p[order]
+    raw = ranked * m / np.arange(1, m + 1)
+    monotone = np.minimum.accumulate(raw[::-1])[::-1]   # enforce non-decreasing q
+    q[order] = np.clip(monotone, 0.0, 1.0)
+    reject = np.zeros(p.shape, dtype=bool)
+    reject[order] = q[order] <= alpha
+    return q, reject
+
+
+def _ols_r2(Y: np.ndarray, cols: List[np.ndarray]) -> float:
+    """R^2 of an OLS of Y on an intercept + the given columns (numpy lstsq)."""
+    X = np.column_stack([np.ones_like(Y)] + cols)
+    beta, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+    resid = Y - X @ beta
+    ss_res = float(resid @ resid)
+    ss_tot = float(((Y - Y.mean()) ** 2).sum())
+    if ss_tot <= 1e-12:
+        return 0.0
+    return 1.0 - ss_res / ss_tot
+
+
+def _nonlinear_b_paths(R: np.ndarray, M: np.ndarray, Y: np.ndarray) -> tuple:
+    """Quantify a non-linear (quadratic) mediator->target b-path.
+
+    base = Y ~ R ; linear = Y ~ R + M ; quad = Y ~ R + M + M^2.
+    Returns (nl_gain, mediator_partial_total) where:
+      nl_gain                = quad - linear  (how much the linear b under-shoots)
+      mediator_partial_total = quad - base    (total mediator path R^2, incl. curve)
+    A large nl_gain means a U-shaped / non-monotone relation the standard linear
+    mediation would miss (indirect under-estimated). numpy only.
+    """
+    if len(Y) < 6 or M.std() < 1e-12:
+        return 0.0, 0.0
+    Mc = M - M.mean()
+    base = _ols_r2(Y, [R])
+    linear = _ols_r2(Y, [R, Mc])
+    quad = _ols_r2(Y, [R, Mc, Mc * Mc])
+    return max(quad - linear, 0.0), max(quad - base, 0.0)
 
 
 # --------------------------------------------------------------------------------------
@@ -136,12 +192,16 @@ def mediation(
         np.isfinite(indirect) and np.isfinite(c_total)
         and indirect * c_total > 0
     )
+    nl_gain, med_partial_total = _nonlinear_b_paths(R, M, Y)
+    nl_indirect_mag = abs(a) * math.sqrt(med_partial_total)
     return {
         "root": root, "mediator": mediator, "target": target, "n": n,
         "a": a, "b": b, "c_total": c_total, "c_direct": c_direct,
         "indirect": indirect, "prop_mediated": prop,
         "a_p": _two_sided_p(_slope_t(a, n)), "indirect_p": indirect_p,
         "sign_consistent": sign_consistent, "unstable": bool(unstable),
+        "nl_gain": nl_gain, "nl_indirect_mag": nl_indirect_mag,
+        "nonlinear_b": bool(nl_gain > NONLINEAR_GAIN),
     }
 
 
@@ -191,6 +251,7 @@ def measure_edges(
     feature_dictionary: pd.DataFrame,
     min_n: int = DEFAULT_MIN_N,
     discovery_r: float = DISCOVERY_R,
+    fdr_alpha: float = FDR_ALPHA,
 ) -> pd.DataFrame:
     """Measure mediation for every (root_cause, mediator) candidate pair.
 
@@ -235,4 +296,11 @@ def measure_edges(
 
     if not rows:
         return pd.DataFrame(columns=MEDIATION_COLUMNS)
+
+    # Benjamini-Hochberg across the whole (root x mediator) sweep so the many
+    # pairwise mediation tests don't inflate false positives.
+    q, reject = bh_fdr(np.array([r["indirect_p"] for r in rows]), alpha=fdr_alpha)
+    for row, qv, rj in zip(rows, q, reject):
+        row["indirect_q"] = float(qv)
+        row["bh_reject"] = bool(rj)
     return pd.DataFrame(rows)[MEDIATION_COLUMNS]
