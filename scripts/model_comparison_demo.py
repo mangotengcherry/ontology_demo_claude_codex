@@ -334,6 +334,26 @@ def block_learning_curve(ds: Dataset, iterations: int, seed: int, k_repeats: int
 
 
 # --------------------------------------------------------------------------------------
+def run(input_dir: str = "input", bad_quantile: float = 0.80, iterations: int = 300,
+        seed: int = 42, n_wafers: int = 250) -> None:
+    """Run all five performance-arm blocks. Reusable from run_demo.py."""
+    ds = load_dataset(input_dir, bad_quantile, n_wafers, seed)
+    print(SEP)
+    print(f"ONTOLOGY x YIELD  --  flat vs ontology CatBoost   [data source: {ds.source}]")
+    print(f"  wafers={len(ds.X)}  features={ds.X.shape[1]}  categorical={len(ds.cat_features)}")
+    print(f"  roles: " + ", ".join(f"{k}={v}" for k, v in
+          pd.Series(ds.roles).value_counts().items()))
+
+    ctx = block_performance(ds, iterations, seed)
+    block_attribution(ds, ctx, iterations, seed)
+    block_chain(ds)
+    block_learning_curve(ds, iterations, seed)
+    print()
+    print(SEP)
+    print("Read the three robust wins in docs/model_comparison_findings.md before presenting.")
+    print(SEP)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input-dir", default="input")
@@ -342,22 +362,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--n-wafers", type=int, default=250, help="virtual-data size when input is absent")
     args = ap.parse_args()
-
-    ds = load_dataset(args.input_dir, args.bad_quantile, args.n_wafers, args.seed)
-    print(SEP)
-    print(f"ONTOLOGY x YIELD  --  flat vs ontology CatBoost   [data source: {ds.source}]")
-    print(f"  wafers={len(ds.X)}  features={ds.X.shape[1]}  categorical={len(ds.cat_features)}")
-    print(f"  roles: " + ", ".join(f"{k}={v}" for k, v in
-          pd.Series(ds.roles).value_counts().items()))
-
-    ctx = block_performance(ds, args.iterations, args.seed)
-    block_attribution(ds, ctx, args.iterations, args.seed)
-    block_chain(ds)
-    block_learning_curve(ds, args.iterations, args.seed)
-    print()
-    print(SEP)
-    print("Read the three robust wins in docs/model_comparison_findings.md before presenting.")
-    print(SEP)
+    run(args.input_dir, args.bad_quantile, args.iterations, args.seed, args.n_wafers)
 
 
 if __name__ == "__main__":

@@ -22,24 +22,29 @@ INPUT_DIR = "input"
 def main() -> None:
     args = _parse_args()
     mode = _resolve_mode(args.mode, args.input_dir)
-    if mode == "real":
-        result = run_real_dataset_pipeline(
-            input_dir=args.input_dir,
-            data_dir=args.data_dir,
-            output_dir=args.output_dir,
-            bad_quantile=args.bad_quantile,
-        )
-        _print_real_summary(result, args.data_dir, args.output_dir)
-        return
+    if mode == "virtual":
+        virtual_summary = generate_virtual_input_dataset(args.input_dir, n_wafers=args.virtual_wafers)
 
-    virtual_summary = generate_virtual_input_dataset(args.input_dir, n_wafers=args.virtual_wafers)
     result = run_real_dataset_pipeline(
         input_dir=args.input_dir,
         data_dir=args.data_dir,
         output_dir=args.output_dir,
         bad_quantile=args.bad_quantile,
     )
-    _print_virtual_summary(virtual_summary, result, args.input_dir, args.data_dir, args.output_dir)
+    if mode == "real":
+        _print_real_summary(result, args.data_dir, args.output_dir)
+    else:
+        _print_virtual_summary(virtual_summary, result, args.input_dir, args.data_dir, args.output_dir)
+
+    if args.with_model_comparison:
+        from scripts.model_comparison_demo import run as run_model_comparison
+
+        run_model_comparison(
+            input_dir=args.input_dir,
+            bad_quantile=args.bad_quantile,
+            iterations=args.mc_iterations,
+            n_wafers=args.virtual_wafers,
+        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -55,6 +60,12 @@ def _parse_args() -> argparse.Namespace:
         help="Target quantile used to flag bad wafers when raw_data.csv has no bad_flag column.",
     )
     parser.add_argument("--virtual-wafers", type=int, default=250, help="Number of wafers to generate in virtual mode.")
+    parser.add_argument(
+        "--with-model-comparison",
+        action="store_true",
+        help="Also run the performance arm (flat vs ontology CatBoost) after the ontology-SHAP run.",
+    )
+    parser.add_argument("--mc-iterations", type=int, default=300, help="CatBoost iterations for the performance arm.")
     return parser.parse_args()
 
 

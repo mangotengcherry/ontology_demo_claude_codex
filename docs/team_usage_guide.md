@@ -52,6 +52,24 @@ streamlit run app.py
 
 > 형식만 먼저 보고 싶으면 데이터 없이 `python3 run_demo.py --mode virtual` 로 가상 데이터를 생성·분석해 산출물 형식을 확인할 수 있습니다.
 
+### 0-6. 성능 arm — flat vs ontology CatBoost (선택)
+
+해석(①) 외에 **학습(②)** 측면 — ontology semantic layer 가 단순 tabular CatBoost 대비
+도움이 되는지 — 를 5블록(PERFORMANCE/ATTRIBUTION/ONTOLOGY-LEVEL SHAP/MEASURED CAUSAL
+CHAIN/LEARNING CURVE)으로 보여줍니다.
+
+```bash
+# 단독 실행 (input 3종이 없으면 가상데이터 자동 생성)
+python3 scripts/model_comparison_demo.py --input-dir input
+
+# 해석 run 뒤에 이어서 실행
+python3 run_demo.py --mode real --input-dir input --with-model-comparison
+```
+
+> **주의:** 주장은 "큰 N 정확도 향상"이 아니라 **누수 차단·저데이터 inductive bias·귀속이
+> 손잡이로** 세 가지 win 으로만 한다. 정직한 비-win 과 함께 `docs/model_comparison_findings.md`
+> 를 먼저 읽고 발표할 것.
+
 ## 1. 평가 컨셉
 
 이 프로젝트의 목적은 bad wafer 기준 평균 SHAP ranking을 그대로 원인으로 확정하지 않고, 공정 ontology를 이용해 검증 가능한 causal hypothesis로 바꾸는 것입니다.
