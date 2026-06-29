@@ -14,9 +14,6 @@ from src.causal_evidence import measure_edges
 TARGET_ID = "defect_rate"
 COHORT_ID = "__BAD_WAFER_COHORT__"
 RAW_DATA_FILE = "raw_data.csv"
-SHAP_FILE = "x_feature_shap_value.csv"            # legacy long form (feature, shap_value)
-BAD_SHAP_FILE = shap_inputs.BAD_SHAP_FILE          # wide per-bad-wafer SHAP
-ALL_SHAP_FILE = shap_inputs.ALL_SHAP_FILE          # wide per-(good+bad)-wafer SHAP
 RELATION_FILE = "prc_metro_relation.csv"
 BAD_WAFERS_FILE = "bad_wafers.csv"
 BAD_WAFERS_FILES = ("bad_wafers.csv", "bad_wafer_list.csv")   # accepted filenames (alias)
@@ -33,7 +30,6 @@ class StandardDatasetArtifacts:
     causal_edges: pd.DataFrame
     mediation: pd.DataFrame
     process_history: pd.DataFrame
-    engineer_feedback: pd.DataFrame
     ground_truth: pd.DataFrame
     shap_cohort_comparison: pd.DataFrame | None = None
 
@@ -77,13 +73,13 @@ def build_standard_dataset(
 
     bad_keys = set(shap_inputs.combined_key(target["root_lot_id"], target["wafer_id"])[target["bad_flag"] == 1])
     try:
-        cohort_shap, comparison, shap_source = shap_inputs.resolve_cohort_mean(
+        cohort_shap, comparison, _ = shap_inputs.resolve_cohort_mean(
             input_dir, feature_cols, bad_keys, read_csv=lambda name: _read_optional_csv(input_dir, name)
         )
     except FileNotFoundError:
         if require_shap:
             raise
-        cohort_shap, comparison, shap_source = _empty_cohort_shap(), None, "none"
+        cohort_shap, comparison = _empty_cohort_shap(), None
 
     feature_ids = _ordered_union(feature_cols, cohort_shap["feature"].astype(str).tolist())
     feature_dictionary = _build_feature_dictionary(feature_ids, relation)
@@ -92,7 +88,6 @@ def build_standard_dataset(
     mediation = measure_edges(feature_matrix, target, feature_dictionary)
     causal_edges = _build_causal_edges(feature_dictionary, relation, mediation)
     process_history = _build_process_history(raw)
-    engineer_feedback = _empty_engineer_feedback()
     ground_truth = _unknown_ground_truth()
 
     artifacts = StandardDatasetArtifacts(
@@ -103,7 +98,6 @@ def build_standard_dataset(
         causal_edges=causal_edges,
         mediation=mediation,
         process_history=process_history,
-        engineer_feedback=engineer_feedback,
         ground_truth=ground_truth,
         shap_cohort_comparison=comparison,
     )
@@ -118,7 +112,6 @@ def write_standard_dataset(artifacts: StandardDatasetArtifacts, output_dir: str 
     artifacts.shap_values.to_csv(os.path.join(output_dir, "shap_values.csv"), index=False)
     artifacts.feature_dictionary.to_csv(os.path.join(output_dir, "feature_dictionary.csv"), index=False)
     artifacts.process_history.to_csv(os.path.join(output_dir, "process_history.csv"), index=False)
-    artifacts.engineer_feedback.to_csv(os.path.join(output_dir, "engineer_feedback.csv"), index=False)
     artifacts.ground_truth.to_csv(os.path.join(output_dir, "ground_truth.csv"), index=False)
     artifacts.mediation.to_csv(os.path.join(output_dir, "mediation.csv"), index=False)
     _write_causal_edges(artifacts.causal_edges, os.path.join(output_dir, "causal_edges.csv"))
@@ -588,12 +581,6 @@ def _row_value(row: pd.Series, column: str) -> str:
     if column not in row.index or pd.isna(row[column]):
         return ""
     return str(row[column])
-
-
-def _empty_engineer_feedback() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=["hypothesis_id", "engineer_judgment", "action_type", "action_status", "outcome", "note"]
-    )
 
 
 def _unknown_ground_truth() -> pd.DataFrame:

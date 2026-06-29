@@ -2,6 +2,30 @@
 
 bad wafer 기준 평균 SHAP 결과를 공정 ontology와 연결해 root-cause candidate와 causal hypothesis report를 생성하는 오프라인 분석 도구입니다.
 
+## 🚀 팀원 quickstart — 데이터만 갈아끼우고 바로 실행
+
+```bash
+pip install -r requirements.txt
+
+# 1) 입력 형식이 헷갈리면, 가상 데이터를 한 번 생성해 input/ 의 컬럼 형식을 눈으로 확인
+python3 run_demo.py --mode virtual          # input/ 에 예시 파일 6종 생성
+
+# 2) input/ 의 파일을 우리 데이터로 교체 (형식은 위 예시와 동일하게)
+#    raw_data.csv / prc_metro_relation.csv / bad_wafer_shap_value.csv
+#    all_wafer_shap_value.csv / bad_wafers.csv
+
+# 3) 노트북 실행 (권장): 상단에서 MODE(1/2) 선택, USE_VIRTUAL_DEMO_DATA=False 로
+jupyter notebook notebooks/evaluation_guide.ipynb
+#    → '0.5 입력 점검(preflight)' 셀이 컬럼/일치 여부를 ✅/❌ 로 먼저 확인해 줍니다.
+
+# (CLI로 한 번에 돌리려면)
+python3 run_demo.py --mode real --input-dir input --with-model-comparison
+```
+
+- **MODE 1**: 우리가 CatBoost 를 학습해 그 SHAP 으로 해석 (제공 SHAP 불필요).
+- **MODE 2**: 회사 production 모델이 만든 **제공 SHAP** 으로 해석 (학습 없음).
+- 핵심 체크: **wide SHAP 의 feature 컬럼명 = `raw_data.csv` 의 feature 컬럼명** (preflight 가 자동 점검).
+
 ## 실행 모드
 
 | 모드 | 목적 | 입력 |

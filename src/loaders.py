@@ -14,7 +14,6 @@ REQUIRED_COLUMNS: Dict[str, list] = {
     "feature_dictionary": ["feature_id", "causal_role", "leakage_risk", "mechanism_group"],
     "causal_edges": ["source_feature", "target_feature", "relation", "confidence"],
     "process_history": ["wafer_id", "process_step", "chamber_id", "ppid"],
-    "engineer_feedback": ["hypothesis_id", "engineer_judgment", "action_status"],
     "ground_truth": ["true_root_feature", "true_chain_text", "true_chamber"],
 }
 

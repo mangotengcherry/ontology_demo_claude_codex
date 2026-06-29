@@ -109,7 +109,6 @@ def _legacy_mean_from_wide(bad_shap_wide: pd.DataFrame) -> pd.DataFrame:
 
 def _build_raw_data(n_wafers: int, seed: int) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    n_lots = max(1, int(np.ceil(n_wafers / 5)))
     rows = []
     for i in range(n_wafers):
         lot = f"VLOT{1000 + i // 5}"

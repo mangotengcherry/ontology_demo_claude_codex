@@ -101,7 +101,6 @@ def cohort_mean_shap(wide: pd.DataFrame, feature_cols: List[str]) -> pd.DataFram
     uses mean(|SHAP|) while sign/direction uses the signed mean.
     """
     rows = []
-    n = int(len(wide))
     for c in feature_cols:
         vals = pd.to_numeric(wide[c], errors="coerce").dropna().to_numpy(dtype=float)
         if vals.size == 0:

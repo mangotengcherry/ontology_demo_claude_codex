@@ -27,6 +27,11 @@ def main() -> None:
     mode = _resolve_mode(args.mode, args.input_dir)
     if mode == "virtual":
         virtual_summary = generate_virtual_input_dataset(args.input_dir, n_wafers=args.virtual_wafers)
+    else:
+        # Real data: print the preflight checklist so a bad swap surfaces clearly.
+        from src.input_check import check_inputs, format_report
+
+        print(format_report(check_inputs(args.input_dir, require_shap=True)))
 
     result = run_real_dataset_pipeline(
         input_dir=args.input_dir,

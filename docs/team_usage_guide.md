@@ -158,6 +158,15 @@ input/prc_metro_relation.csv
 input/bad_wafers.csv
 ```
 
+3. **입력 점검(preflight)으로 교체가 잘 됐는지 먼저 확인**합니다. 노트북은 `0.5 입력 점검` 셀이, CLI(`run_demo.py --mode real`)는 실행 직전 자동으로 체크리스트를 출력합니다. 직접 확인하려면:
+
+```python
+from src.input_check import check_inputs, format_report
+print(format_report(check_inputs("input", require_shap=True)))
+```
+
+가장 흔한 실수는 **wide SHAP 의 feature 컬럼명이 `raw_data.csv` 의 feature명과 다른 경우**(매핑 0개)이며, preflight 가 ❌ 로 바로 잡아줍니다. 형식이 헷갈리면 `python3 run_demo.py --mode virtual` 로 `input/` 에 예시 파일을 생성해 컬럼 형식을 확인하세요.
+
 3. 실행합니다.
 
 ```bash
