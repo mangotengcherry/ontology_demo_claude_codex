@@ -46,7 +46,7 @@ python3 -m pytest tests/ -q
 | `prc_metro_relation.csv` | `prc_step`, `metro_step`, `metro_item`, `subitem_id`, `metro_grade` | 공정 step과 metro feature의 관계 seed |
 | `bad_wafer_shap_value.csv` | `root_lot_id`+`wafer_id`(또는 `root_lot_wafer_id`) + feature 컬럼 | bad wafer에 대한 feature별 SHAP (wide). 평균이 bad-cohort SHAP이 됩니다. |
 | `all_wafer_shap_value.csv` | 동일 (good + bad) | good·bad 전체 wafer SHAP (wide). good vs bad SHAP 비교(`shap_cohort_comparison.csv`)에 사용. |
-| `bad_wafers.csv` | `root_lot_id`, `wafer_id` 또는 `root_lot_wafer_id` | 선택 입력. SHAP mean 계산에 사용한 bad wafer cohort |
+| `bad_wafers.csv` (또는 `bad_wafer_list.csv`) | `root_lot_id`, `wafer_id` 또는 `root_lot_wafer_id` | SHAP mean 계산에 사용한 bad wafer cohort. **있으면 기본으로 이 리스트로 bad wafer 판정** |
 
 - SHAP 입력 우선순위: `bad_wafer_shap_value.csv` → 없으면 `all_wafer_shap_value.csv`(bad-flag 행으로 cohort 산출) → 없으면 legacy `x_feature_shap_value.csv`(`feature`, `shap_value` long form)도 그대로 지원합니다.
 - wide SHAP 파일에 `base_value`, `prediction`, `target` 같은 비-feature 컬럼이 있어도 자동 무시합니다. feature 컬럼명은 `raw_data.csv`의 feature명과 일치해야 매핑됩니다.

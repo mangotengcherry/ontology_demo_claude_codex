@@ -19,6 +19,7 @@ BAD_SHAP_FILE = shap_inputs.BAD_SHAP_FILE          # wide per-bad-wafer SHAP
 ALL_SHAP_FILE = shap_inputs.ALL_SHAP_FILE          # wide per-(good+bad)-wafer SHAP
 RELATION_FILE = "prc_metro_relation.csv"
 BAD_WAFERS_FILE = "bad_wafers.csv"
+BAD_WAFERS_FILES = ("bad_wafers.csv", "bad_wafer_list.csv")   # accepted filenames (alias)
 ID_COLUMNS = ["root_lot_id", "wafer_id"]
 RAW_NON_FEATURE_COLUMNS = {"root_lot_id", "wafer_id", "tkout_time", "target"}
 
@@ -40,10 +41,16 @@ class StandardDatasetArtifacts:
 def build_standard_dataset(
     input_dir: str = "input",
     output_dir: str = "data",
-    bad_quantile: float = 0.80,
+    bad_quantile: float | None = None,
     require_shap: bool = True,
 ) -> StandardDatasetArtifacts:
     """Build standard project CSVs from the real dataset contract.
+
+    Bad-wafer labelling prefers the explicit cohort list: when
+    `bad_wafers.csv` (or `bad_wafer_list.csv`) is present it defines `bad_flag`
+    and `bad_quantile` is ignored. `bad_quantile` (a target quantile in 0..1) is
+    only a fallback used when no list is provided; if neither is available a
+    clear error is raised rather than silently picking a threshold.
 
     The SHAP input is interpreted as bad-wafer cohort mean SHAP, not raw per-wafer
     SHAP. The resulting `shap_values.csv` therefore contains one row per feature
@@ -168,13 +175,21 @@ def _normalize_relation(relation: pd.DataFrame) -> pd.DataFrame:
 
 
 def _read_optional_bad_wafers(input_dir: str) -> pd.DataFrame | None:
-    path = os.path.join(input_dir, BAD_WAFERS_FILE)
-    if not os.path.exists(path):
-        return None
-    return pd.read_csv(path)
+    for name in BAD_WAFERS_FILES:
+        path = os.path.join(input_dir, name)
+        if os.path.exists(path):
+            return pd.read_csv(path)
+    return None
 
 
-def _build_target(raw: pd.DataFrame, bad_quantile: float, bad_wafers: pd.DataFrame | None = None) -> pd.DataFrame:
+def _build_target(
+    raw: pd.DataFrame, bad_quantile: float | None = None, bad_wafers: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Label bad wafers: explicit cohort list first, target quantile only as fallback.
+
+    Priority: `bad_wafers` list (quantile ignored) > `bad_quantile` threshold. When
+    neither is supplied, raise -- never silently pick a threshold.
+    """
     target = raw[["root_lot_id", "wafer_id", "target"]].copy()
     target = target.rename(columns={"target": TARGET_ID})
     y = pd.to_numeric(target[TARGET_ID], errors="coerce")
@@ -190,9 +205,14 @@ def _build_target(raw: pd.DataFrame, bad_quantile: float, bad_wafers: pd.DataFra
                 f"{BAD_WAFERS_FILE} contains wafer IDs not present in raw_data.csv: {sample}"
             )
         target["bad_flag"] = raw_keys.isin(bad_keys).astype(int)
-    else:
+    elif bad_quantile is not None:
         threshold = y.quantile(bad_quantile)
         target["bad_flag"] = (y >= threshold).astype(int)
+    else:
+        raise ValueError(
+            "bad wafer 판정 기준이 없습니다. input/bad_wafers.csv(또는 bad_wafer_list.csv) 를 제공하거나 "
+            "bad_quantile(0~1) 값을 지정하세요."
+        )
     return target
 
 

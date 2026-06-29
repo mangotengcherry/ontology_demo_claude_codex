@@ -216,9 +216,9 @@ root_lot_id, wafer_id, <feature_1>, <feature_2>, ...      # 또는 root_lot_wafe
 - 입력 우선순위: `bad_wafer_shap_value.csv` → `all_wafer_shap_value.csv`(bad-flag 행으로 cohort 산출) → legacy `x_feature_shap_value.csv`(`feature`, `shap_value` long form).
 - wafer별 SHAP이 아니라 cohort 평균으로 집계되므로, 대시보드 SHAP view는 bad wafer cohort 기준 ranking으로 표시됩니다.
 
-### bad_wafers.csv
+### bad_wafers.csv (또는 bad_wafer_list.csv)
 
-선택 입력이지만 실제 데이터 분석에서는 사용하는 것을 권장합니다. 이 파일은 SHAP mean을 계산할 때 사용한 bad wafer cohort와 동일해야 합니다.
+bad wafer 판정의 **기본 기준**입니다. 이 파일이 있으면 그 리스트로 `bad_flag` 를 만들고 `bad_quantile`(분위 기준)은 무시합니다. 노트북·CLI 모두 리스트를 우선 사용하며, 리스트가 없을 때만 `bad_quantile`(0~1) 값으로 fallback 합니다. 이 파일은 SHAP mean 을 계산할 때 사용한 bad wafer cohort 와 동일해야 합니다.
 
 지원 형식 1:
 
