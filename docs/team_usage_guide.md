@@ -53,9 +53,10 @@ jupyter notebook notebooks/evaluation_guide.ipynb
 ```
 
 > 노트북 상단 설정 셀에서 **MODE** 를 고른 뒤 `Restart & Run All` 합니다. 두 흐름은 *CatBoost 학습 단계* 만 다릅니다.
-> - **MODE 1**: 실데이터 → 온톨로지 → **CatBoost 학습** → SHAP·ontology SHAP → 해석 (제공 SHAP 불필요)
-> - **MODE 2**: 실데이터 → 온톨로지 → **제공된 SHAP** → ontology SHAP → 해석 (학습 없음)
+> - **MODE 1**: 실데이터 → 온톨로지 → **CatBoost 학습** → SHAP·ontology SHAP → 해석 (제공 SHAP 불필요) — 미리 실행본 `evaluation_guide.ipynb`
+> - **MODE 2**: 실데이터 → 온톨로지 → **제공된 SHAP** → ontology SHAP → 해석 (학습 없음) — 미리 실행본 `evaluation_guide_mode2.ipynb`
 >
+> 두 사본은 동일한 노트북이며, 아무 파일에서나 `MODE` 값만 바꿔 다시 실행할 수 있습니다.
 > 실데이터 평가 시 `USE_VIRTUAL_DEMO_DATA=False` 로 두고 `input/` 에 계약 파일을 넣으세요.
 > 형식만 먼저 보고 싶으면 데이터 없이 `python3 run_demo.py --mode virtual` 로 가상 데이터를 생성·분석해 산출물 형식을 확인할 수 있습니다.
 
