@@ -40,7 +40,10 @@ def run_analysis(data_dir: str = "data", output_dir: str = "outputs") -> Dict:
     os.makedirs(output_dir, exist_ok=True)
     cards.to_csv(os.path.join(output_dir, "hypothesis_cards.csv"), index=False)
     ontology_summary.to_csv(os.path.join(output_dir, "ontology_level_shap_summary.csv"), index=False)
-    write_markdown_report(data, mapped, cards, ontology_summary, os.path.join(output_dir, "report.md"))
+    write_markdown_report(
+        data, mapped, cards, ontology_summary, os.path.join(output_dir, "report.md"),
+        cohort_comparison=data.get("shap_cohort_comparison"),
+    )
     return {
         "data": data,
         "mapped": mapped,

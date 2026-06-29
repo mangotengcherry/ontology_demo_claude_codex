@@ -1,9 +1,12 @@
 """Run ontology-SHAP analysis with virtual input data or real company inputs.
 
 Default behavior is `--mode auto`: if `input/raw_data.csv`,
-`input/x_feature_shap_value.csv`, and `input/prc_metro_relation.csv` exist, the
-real dataset adapter is used. Otherwise virtual company-style input CSVs are
-generated first, then the same real-data pipeline is executed.
+`input/prc_metro_relation.csv`, and a SHAP input
+(`input/bad_wafer_shap_value.csv` / `input/all_wafer_shap_value.csv` wide form,
+or legacy `input/x_feature_shap_value.csv`) exist, the real dataset adapter is
+used. Otherwise virtual company-style input CSVs are generated first, then the
+same real-data pipeline is executed. Add `--with-model-comparison` to also run
+the performance arm (flat vs ontology CatBoost) and save its charts.
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ def main() -> None:
             bad_quantile=args.bad_quantile,
             iterations=args.mc_iterations,
             n_wafers=args.virtual_wafers,
+            save_charts_to=args.mc_charts_dir or os.path.join(args.output_dir, "charts"),
         )
 
 
@@ -66,6 +70,11 @@ def _parse_args() -> argparse.Namespace:
         help="Also run the performance arm (flat vs ontology CatBoost) after the ontology-SHAP run.",
     )
     parser.add_argument("--mc-iterations", type=int, default=300, help="CatBoost iterations for the performance arm.")
+    parser.add_argument(
+        "--mc-charts-dir",
+        default=None,
+        help="Where to save performance-arm charts (default: <output-dir>/charts when --with-model-comparison).",
+    )
     return parser.parse_args()
 
 
@@ -91,7 +100,7 @@ def _print_real_summary(result: dict, data_dir: str, output_dir: str) -> None:
     print(f"outputs                          : {output_dir}/hypothesis_cards.csv")
     print(f"report                           : {os.path.join(output_dir, 'report.md')}")
     print("=" * 78)
-    print("다음 단계: streamlit run app.py")
+    print("다음 단계: outputs/report.md 확인 또는 notebooks/evaluation_guide.ipynb 실행")
 
 
 def _print_virtual_summary(virtual_summary: dict, result: dict, input_dir: str, data_dir: str, output_dir: str) -> None:
@@ -112,7 +121,7 @@ def _print_virtual_summary(virtual_summary: dict, result: dict, input_dir: str, 
     print(f"outputs                           : {output_dir}/hypothesis_cards.csv")
     print(f"report                            : {os.path.join(output_dir, 'report.md')}")
     print("=" * 78)
-    print("다음 단계: streamlit run app.py")
+    print("다음 단계: outputs/report.md 확인 또는 notebooks/evaluation_guide.ipynb 실행")
 
 
 if __name__ == "__main__":

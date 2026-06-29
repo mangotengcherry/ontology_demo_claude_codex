@@ -1,12 +1,12 @@
 # 성능 arm 결과 — flat vs ontology CatBoost
 
 > 실행: `python3 scripts/model_comparison_demo.py --input-dir input`
-> (input 3종이 없으면 가상데이터를 자동 생성해 동일 파이프라인으로 검증한다.)
+> (input 이 없으면 가상데이터를 자동 생성해 동일 파이프라인으로 검증한다.)
 > 시각화: `--save-charts outputs/charts` 로 6개 차트 PNG 저장, 또는
-> `notebooks/model_comparison_scenario.ipynb` 에서 인라인으로 본다.
+> `notebooks/evaluation_guide.ipynb` 에서 인라인으로 본다.
 >
 > 이 문서는 **학습(②) 측면**의 정직한 결과와 한계다. 해석(①) 측면은
-> `docs/diagnosis_and_improvement_plan.md` + `src/causal_evidence.py` 를 본다.
+> `src/causal_evidence.py` (측정 매개효과) + `src/hypothesis_engine.py` 를 본다.
 
 ---
 
@@ -112,8 +112,8 @@ root CVD RF_TIME_1     : 측정 indirect=0.50 인데 모델 SHAP share  4.4% < m
 
 ## 4. 실데이터에서 깨지면 보는 곳 (체크리스트)
 
-- 사슬이 안 나오면 → `docs/diagnosis_and_improvement_plan.md` §3, `src/causal_evidence.py` 의
-  `DISCOVERY_R`/`DEFAULT_MIN_N`/`COLLINEARITY_D`.
+- 사슬이 안 나오면 → `src/causal_evidence.py` 의
+  `DISCOVERY_R`/`DEFAULT_MIN_N`/`COLLINEARITY_D` 임계값을 확인한다.
 - 이름 규칙 예외로 mediator 미분류 → root↔metro 엣지 0개 → SHAP 랭킹 회귀.
   `_feature_metadata` 토큰 매칭, `prc_metro_relation` 의 `prc_step` 문자열 일치 확인.
 - 진짜 상류 root 의 모델 SHAP 이 낮음(다중공선성으로 mediator 가 credit 흡수) →
@@ -123,7 +123,7 @@ root CVD RF_TIME_1     : 측정 indirect=0.50 인데 모델 SHAP share  4.4% < m
 
 ## 5. 한계 / 다음
 
-- 이 스크립트는 `run_demo.py`/`app.py` 와 아직 분리돼 있다(P2 통합 대상).
+- 성능 arm 은 `run_demo.py --with-model-comparison` 또는 `notebooks/evaluation_guide.ipynb` 에서 함께 실행된다.
 - learning curve 는 가상데이터에서 검증됨. **실데이터 5블록 캡처는 사내에서 실행**해야 한다(실데이터 사외 반출 금지).
 - **P1 완료**: mediation 다중비교 보정(BH-FDR, `bh_fdr`/`indirect_q`/`bh_reject`)·비선형 b-path
   플래그(`nonlinear_b`/`nl_indirect_mag`)·credit-absorption 진단(`src/shap_diagnostics.py`) 추가됨.

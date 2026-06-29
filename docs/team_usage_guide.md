@@ -18,9 +18,11 @@ pip install -r requirements.txt
 
 ```text
 input/raw_data.csv                # 필수 — wafer별 원천값 + target
-input/x_feature_shap_value.csv    # 필수 — feature별 bad wafer 평균 SHAP
+input/bad_wafer_shap_value.csv    # 필수 — bad wafer SHAP (wide: wafer 1행 × feature 컬럼)
+input/all_wafer_shap_value.csv    # 권장 — good+bad SHAP (wide). good vs bad 비교에 사용
 input/prc_metro_relation.csv      # 필수 — 공정-계측 관계 seed
 input/bad_wafers.csv              # 권장 — SHAP 계산에 쓴 bad wafer cohort
+# (legacy: input/x_feature_shap_value.csv 의 long form [feature, shap_value]도 그대로 지원)
 ```
 
 ### 0-3. 분석 실행 (한 줄)
@@ -44,12 +46,13 @@ outputs/ontology_level_shap_summary.csv
 data/mediation.csv                     # 측정된 매개효과 원본 (a, b, indirect, %매개, p, 층화 안정성)
 ```
 
-### 0-5. 대시보드 (선택)
+### 0-5. 가이드 노트북 (권장)
 
 ```bash
-streamlit run app.py
+jupyter notebook notebooks/evaluation_guide.ipynb
 ```
 
+> 평가 실행 + 결과 확인 + 성능 비교 + 모델 해석을 한 노트북에서 위에서부터 실행하면 됩니다.
 > 형식만 먼저 보고 싶으면 데이터 없이 `python3 run_demo.py --mode virtual` 로 가상 데이터를 생성·분석해 산출물 형식을 확인할 수 있습니다.
 
 ### 0-6. 성능 arm — flat vs ontology CatBoost (선택)
@@ -69,9 +72,9 @@ python3 scripts/model_comparison_demo.py --input-dir input --save-charts outputs
 python3 run_demo.py --mode real --input-dir input --with-model-comparison
 ```
 
-**노트북으로 분석:** `notebooks/model_comparison_scenario.ipynb` 를 열어 위에서부터 실행하면
-역할 분류·측정 사슬·5블록 차트·credit absorption 을 한 곳에서 본다. `input/` 에 실제 3종을
-넣고 `Restart & Run All` 하면 동일 셀이 실데이터로 채워진다(현재는 가상데이터 출력이 렌더링돼 있음).
+**노트북으로 분석:** `notebooks/evaluation_guide.ipynb` 를 열어 위에서부터 실행하면
+역할 분류·측정 사슬·5블록 차트·credit absorption·good vs bad SHAP 비교를 한 곳에서 본다.
+`input/` 에 실제 데이터를 넣고 `Restart & Run All` 하면 동일 셀이 실데이터로 채워진다.
 
 > **주의:** 주장은 "큰 N 정확도 향상"이 아니라 **누수 차단·저데이터 inductive bias·귀속이
 > 손잡이로** 세 가지 win 으로만 한다. 정직한 비-win 과 함께 `docs/model_comparison_findings.md`
@@ -103,7 +106,9 @@ python3 run_demo.py --mode virtual
 
 ```text
 input/raw_data.csv
-input/x_feature_shap_value.csv
+input/all_wafer_shap_value.csv    # wide
+input/bad_wafer_shap_value.csv    # wide
+input/x_feature_shap_value.csv    # legacy long (back-compat)
 input/prc_metro_relation.csv
 input/bad_wafers.csv
 ```
@@ -128,20 +133,21 @@ python3 run_demo.py --mode real --input-dir input --bad-quantile 0.80
 python3 run_demo.py
 ```
 
-`input/`에 실제 입력 3개가 모두 있으면 real mode, 없으면 virtual mode로 실행합니다.
+`input/`에 `raw_data.csv` + `prc_metro_relation.csv` + SHAP 입력이 모두 있으면 real mode, 없으면 virtual mode로 실행합니다.
 
 ## 3. 데이터 교체 절차
 
 1. 기존 `input/` 폴더를 비웁니다.
-2. 아래 3개 파일을 넣습니다.
+2. 아래 파일을 넣습니다.
 
 ```text
 input/raw_data.csv
-input/x_feature_shap_value.csv
+input/bad_wafer_shap_value.csv    # wide (또는 legacy x_feature_shap_value.csv)
+input/all_wafer_shap_value.csv    # wide, 권장 (good vs bad 비교용)
 input/prc_metro_relation.csv
 ```
 
-가능하면 SHAP mean 계산에 사용한 bad wafer cohort도 같이 넣습니다.
+가능하면 SHAP mean 계산에 사용한 bad wafer cohort(`bad_wafers.csv`)도 같이 넣습니다.
 
 ```text
 input/bad_wafers.csv
@@ -161,10 +167,11 @@ outputs/ontology_level_shap_summary.csv
 outputs/report.md
 ```
 
-5. 대시보드를 엽니다.
+5. 결과를 확인합니다 (report 또는 가이드 노트북).
 
 ```bash
-streamlit run app.py
+cat outputs/report.md
+jupyter notebook notebooks/evaluation_guide.ipynb
 ```
 
 ## 4. 입력 파일 상세
@@ -189,23 +196,24 @@ root_lot_id, wafer_id, tkout_time, target
 | `num|PRC_STEP|erd|SENSOR_GROUP|SENSOR_ITEM|SENSOR_GROUP2` | upstream ERD/process numeric feature |
 | 기타 `num|STEP|ITEM|VALUE` | VM/process numeric feature |
 
-### x_feature_shap_value.csv
+### bad_wafer_shap_value.csv / all_wafer_shap_value.csv (wide form)
 
-필수 컬럼:
+SHAP 입력은 wafer 1행 × feature별 SHAP 컬럼의 **wide form** 두 파일을 사용합니다.
 
 ```text
-feature, shap_value
+root_lot_id, wafer_id, <feature_1>, <feature_2>, ...      # 또는 root_lot_wafer_id 단일 컬럼
 ```
 
-중요한 전제:
-
-- `shap_value`는 bad wafer만 대상으로 계산한 feature별 평균 SHAP입니다.
-- wafer별 SHAP이 아니므로 대시보드의 SHAP view는 선택 wafer가 아니라 bad wafer cohort 기준 ranking으로 표시됩니다.
-- `feature` 값은 `raw_data.csv`의 feature column 이름과 일치해야 합니다.
+- `bad_wafer_shap_value.csv` — bad wafer 대상 SHAP. 컬럼별 평균이 bad-cohort 평균 SHAP(`shap_values.csv`)이 됩니다.
+- `all_wafer_shap_value.csv` — good+bad 전체 SHAP. good vs bad SHAP 비교(`data/shap_cohort_comparison.csv`)와 성능 arm의 "provided model SHAP" 블록에 사용합니다.
+- importance는 mean(|SHAP|), 방향은 signed mean으로 분리 계산합니다(양방향 feature가 과소평가되지 않도록).
+- feature 컬럼명은 `raw_data.csv`의 feature column 이름과 일치해야 매핑됩니다. `base_value`/`prediction`/`target` 같은 비-feature 컬럼은 자동 무시됩니다.
+- 입력 우선순위: `bad_wafer_shap_value.csv` → `all_wafer_shap_value.csv`(bad-flag 행으로 cohort 산출) → legacy `x_feature_shap_value.csv`(`feature`, `shap_value` long form).
+- wafer별 SHAP이 아니라 cohort 평균으로 집계되므로, 대시보드 SHAP view는 bad wafer cohort 기준 ranking으로 표시됩니다.
 
 ### bad_wafers.csv
 
-선택 입력이지만 실제 데이터 분석에서는 사용하는 것을 권장합니다. 이 파일은 `x_feature_shap_value.csv`의 SHAP mean을 계산할 때 사용한 bad wafer cohort와 동일해야 합니다.
+선택 입력이지만 실제 데이터 분석에서는 사용하는 것을 권장합니다. 이 파일은 SHAP mean을 계산할 때 사용한 bad wafer cohort와 동일해야 합니다.
 
 지원 형식 1:
 

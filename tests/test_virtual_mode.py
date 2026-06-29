@@ -16,6 +16,8 @@ class VirtualModeTests(unittest.TestCase):
 
             raw = pd.read_csv(os.path.join(tmp, "raw_data.csv"))
             shap = pd.read_csv(os.path.join(tmp, "x_feature_shap_value.csv"))
+            all_shap = pd.read_csv(os.path.join(tmp, "all_wafer_shap_value.csv"))
+            bad_shap = pd.read_csv(os.path.join(tmp, "bad_wafer_shap_value.csv"))
             relation = pd.read_csv(os.path.join(tmp, "prc_metro_relation.csv"))
             bad_wafers = pd.read_csv(os.path.join(tmp, "bad_wafers.csv"))
 
@@ -23,8 +25,16 @@ class VirtualModeTests(unittest.TestCase):
             self.assertIn("wafer_id", raw.columns)
             self.assertIn("target", raw.columns)
             self.assertIn("num|CVD|erd|pcf|PRESSURE_SLOPE_P95|CVD", raw.columns)
+            # legacy long bad-cohort mean (back-compat)
             self.assertEqual(set(shap.columns), {"feature", "shap_value"})
             self.assertIn("num|MET_CVD|THK_EDGE|AVG", set(shap["feature"]))
+            # new wide per-wafer SHAP contract
+            for wide in (all_shap, bad_shap):
+                self.assertIn("root_lot_id", wide.columns)
+                self.assertIn("wafer_id", wide.columns)
+                self.assertIn("num|MET_CVD|THK_EDGE|AVG", wide.columns)
+            self.assertEqual(len(all_shap), len(raw))
+            self.assertEqual(len(bad_shap), len(bad_wafers))
             self.assertEqual(
                 list(relation.columns),
                 ["prc_step", "metro_step", "metro_item", "subitem_id", "metro_grade"],
