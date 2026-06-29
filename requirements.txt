@@ -1,5 +1,7 @@
 pandas
 numpy
-plotly
-streamlit
 networkx
+# Performance arm (scripts/model_comparison_demo.py): flat vs ontology CatBoost
+catboost
+scikit-learn
+matplotlib

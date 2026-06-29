@@ -44,6 +44,7 @@ from catboost import CatBoostRegressor, Pool  # noqa: E402
 from sklearn.metrics import r2_score  # noqa: E402
 from sklearn.model_selection import train_test_split  # noqa: E402
 
+from src import shap_inputs  # noqa: E402
 from src.real_dataset_adapter import (  # noqa: E402
     TARGET_ID,
     build_standard_dataset,
@@ -74,15 +75,12 @@ class Dataset:
     source: str                     # 'real' or 'virtual'
 
 
-def load_dataset(input_dir: str, bad_quantile: float, n_wafers: int, seed: int) -> Dataset:
-    """Load via the real-data contract; auto-generate virtual data if absent."""
-    if input_files_exist(input_dir):
-        source = "real"
-    else:
-        generate_virtual_input_dataset(input_dir, n_wafers=n_wafers, seed=seed)
-        source = "virtual"
+def dataset_from_artifacts(art, source: str = "real") -> Dataset:
+    """Build a model-ready Dataset from already-built standard artifacts.
 
-    art = build_standard_dataset(input_dir=input_dir, output_dir="data", bad_quantile=bad_quantile)
+    No file IO and no virtual fallback -- the caller controls the data source. Used
+    by notebook Mode 1 (train on real data without a provided SHAP export).
+    """
     fm = art.feature_matrix.drop(columns=["root_lot_id", "wafer_id"])
     y = art.target.set_index(art.target.index)[TARGET_ID].astype(float).reset_index(drop=True)
 
@@ -101,6 +99,20 @@ def load_dataset(input_dir: str, bad_quantile: float, n_wafers: int, seed: int) 
             cat_features.append(col)
     return Dataset(X=X, y=y, cat_features=cat_features, roles=roles, grades=grades,
                    mediation=art.mediation, source=source)
+
+
+def load_dataset(input_dir: str, bad_quantile: float, n_wafers: int, seed: int) -> Dataset:
+    """Load via the real-data contract; auto-generate virtual data if absent (CLI/tests)."""
+    if input_files_exist(input_dir):
+        source = "real"
+    else:
+        generate_virtual_input_dataset(input_dir, n_wafers=n_wafers, seed=seed)
+        source = "virtual"
+
+    # require_shap=False: the performance arm trains its own model and derives SHAP,
+    # so it only needs raw_data + prc_metro_relation, not a provided SHAP export.
+    art = build_standard_dataset(input_dir=input_dir, output_dir="data", bad_quantile=bad_quantile, require_shap=False)
+    return dataset_from_artifacts(art, source)
 
 
 def select_columns(ds: Dataset, drop_leakage: bool) -> Tuple[List[str], List[str]]:
@@ -170,6 +182,33 @@ def shap_rollup(model: CatBoostRegressor, X: pd.DataFrame, cat_features: List[st
     )
     rollup["pct"] = 100 * rollup["mean_abs_shap"] / total
     return per_feat, rollup
+
+
+def trained_ontology_cohort_shap(
+    ds: Dataset, bad_mask: np.ndarray, iterations: int = 300, seed: int = 42,
+) -> pd.DataFrame:
+    """Train the ontology CatBoost on all wafers and return BAD-wafer cohort-mean SHAP.
+
+    Output schema matches `shap_inputs.cohort_mean_shap` (feature, shap_value=signed
+    mean, mean_abs_shap, n_wafers), so the trained model's SHAP can flow through the
+    exact same ontology-SHAP interpretation (hypothesis cards, role roll-up, trace)
+    as the provided-SHAP path. This is the SHAP source for notebook Mode 1.
+    """
+    cols, cats = select_columns(ds, drop_leakage=True)
+    mono = monotone_map(ds, cols, ds.X[cols], ds.y)
+    _, _, model = fit_predict(ds.X[cols], ds.y, ds.X[cols], cats, ONTO_DEPTH, iterations, seed, monotone=mono)
+    catpos = [ds.X[cols].columns.get_loc(c) for c in cats]
+    X_bad = ds.X[cols][np.asarray(bad_mask, dtype=bool)]
+    if len(X_bad) == 0:
+        X_bad = ds.X[cols]
+    sv = model.get_feature_importance(Pool(X_bad, cat_features=catpos), type="ShapValues")[:, :-1]
+    out = pd.DataFrame({
+        "feature": list(cols),
+        "shap_value": sv.mean(axis=0),
+        "mean_abs_shap": np.abs(sv).mean(axis=0),
+        "n_wafers": int(len(X_bad)),
+    })
+    return out.sort_values("mean_abs_shap", ascending=False).reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------------------
@@ -355,12 +394,90 @@ def print_report(res: Results) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# Provided-model SHAP (interpret the COMPANY's own CatBoost, not the re-trained arm)
+# --------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ProvidedShap:
+    source: str                  # which input file the SHAP came from
+    n_wafers: int
+    per_feat: pd.DataFrame       # feature, mean_abs_shap, role, pct
+    rollup: pd.DataFrame         # role, mean_abs_shap, pct
+    credit: pd.DataFrame         # credit-absorption of the provided model vs measured chain
+
+
+def analyze_provided_shap(input_dir: str, ds: Dataset) -> Optional[ProvidedShap]:
+    """Roll up the *provided* (production) SHAP by causal role + diagnose credit absorption.
+
+    This interprets the company's own model from the supplied wide SHAP export
+    (`all_wafer_shap_value.csv`, else `bad_wafer_shap_value.csv`), independent of
+    the flat/ontology models trained here. Returns None when no wide SHAP file
+    exists (e.g. legacy long-only or virtual-without-wide inputs).
+    """
+    feature_cols = list(ds.X.columns)
+
+    def _read(name):
+        path = os.path.join(input_dir, name)
+        return pd.read_csv(path) if os.path.exists(path) else None
+
+    wide = _read(shap_inputs.ALL_SHAP_FILE)
+    source = shap_inputs.ALL_SHAP_FILE
+    if wide is None:
+        wide = _read(shap_inputs.BAD_SHAP_FILE)
+        source = shap_inputs.BAD_SHAP_FILE
+    if wide is None:
+        return None
+
+    feats = shap_inputs.detect_feature_columns(wide, feature_cols)
+    cohort = shap_inputs.cohort_mean_shap(wide, feats)
+    if cohort.empty:
+        return None
+
+    per_feat = cohort.copy()
+    per_feat["role"] = [ds.roles.get(f, "unknown") for f in per_feat["feature"]]
+    total = per_feat["mean_abs_shap"].sum() or 1.0
+    per_feat["pct"] = 100.0 * per_feat["mean_abs_shap"] / total
+    rollup = (
+        per_feat.groupby("role")["mean_abs_shap"].sum().sort_values(ascending=False).reset_index()
+    )
+    rollup["pct"] = 100.0 * rollup["mean_abs_shap"] / total
+
+    share = {row["feature"]: row["mean_abs_shap"] / total for _, row in per_feat.iterrows()}
+    credit = credit_absorption(ds.mediation, share) if ds.mediation is not None else pd.DataFrame()
+    return ProvidedShap(source=source, n_wafers=int(len(wide)),
+                        per_feat=per_feat, rollup=rollup, credit=credit)
+
+
+def print_provided_shap(ps: ProvidedShap) -> None:
+    print()
+    print(SEP)
+    print(f"6) PROVIDED MODEL SHAP  (your production CatBoost, from {ps.source}; rolled up by role)")
+    print(SEP)
+    print("  top features by mean|SHAP| (provided model):")
+    for _, r in ps.per_feat.head(6).iterrows():
+        print(f"    {r['pct']:>5.1f}%  [{r['role']:<22}] {r['feature']}")
+    print("  roll-up by causal role:")
+    for _, r in ps.rollup.iterrows():
+        print(f"    {r['pct']:>5.1f}%  {r['role']}")
+    flagged = ps.credit[ps.credit["credit_absorbed"]] if not ps.credit.empty else ps.credit
+    if flagged is not None and not flagged.empty:
+        print("  CREDIT ABSORPTION in your production model (measured root vs your SHAP share):")
+        for _, r in flagged.iterrows():
+            print(f"    root {r['root']}: measured indirect={r['indirect']:.2f} but provided SHAP "
+                  f"{r['root_shap_share']*100:.1f}% < mediator {r['mediator_shap_share']*100:.1f}%")
+    else:
+        print("  (no credit absorption flagged in the provided model — root carries its measured credit)")
+
+
+# --------------------------------------------------------------------------------------
 def run(input_dir: str = "input", bad_quantile: float = 0.80, iterations: int = 300,
         seed: int = 42, n_wafers: int = 250, save_charts_to: Optional[str] = None) -> Results:
     """Compute the performance arm, print the five blocks, optionally save charts."""
     ds = load_dataset(input_dir, bad_quantile, n_wafers, seed)
     res = compute_results(ds, iterations, seed)
     print_report(res)
+    provided = analyze_provided_shap(input_dir, ds)
+    if provided is not None:
+        print_provided_shap(provided)
     if save_charts_to:
         from src.model_comparison_viz import save_all  # local import keeps matplotlib optional
         paths = save_all(res, save_charts_to)

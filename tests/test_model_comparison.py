@@ -75,6 +75,17 @@ class ModelComparisonTest(unittest.TestCase):
         for p in paths:
             self.assertTrue(os.path.exists(p) and os.path.getsize(p) > 0)
 
+    def test_provided_shap_rollup_and_credit(self):
+        """Provided (production) SHAP from the wide export rolls up by role + flags absorption."""
+        ps = mc.analyze_provided_shap(os.path.join(self._tmp, "input"), self.ds)
+        self.assertIsNotNone(ps)
+        self.assertIn("role", ps.per_feat.columns)
+        self.assertSetEqual({"role", "mean_abs_shap", "pct"}, set(ps.rollup.columns))
+        self.assertAlmostEqual(ps.per_feat["pct"].sum(), 100.0, places=3)
+        # mediator should absorb credit relative to the measured upstream root.
+        self.assertFalse(ps.credit.empty)
+        self.assertTrue(bool(ps.credit["credit_absorbed"].any()))
+
     def test_leakage_inflates_flat_r2(self):
         """Flat-with-leakage test R2 should exceed the leakage-free ceiling."""
         from sklearn.model_selection import train_test_split

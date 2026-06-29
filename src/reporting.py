@@ -14,6 +14,7 @@ def write_markdown_report(
     ontology_summary: pd.DataFrame,
     path: str,
     top_n: int = 20,
+    cohort_comparison: pd.DataFrame | None = None,
 ) -> None:
     """Write a compact, source-backed Markdown report for the latest run."""
     directory = os.path.dirname(path)
@@ -55,9 +56,29 @@ def write_markdown_report(
         "",
         _to_markdown(ontology_summary.head(top_n)),
         "",
+    ]
+
+    if cohort_comparison is not None and not cohort_comparison.empty:
+        cmp_cols = _available_cols(cohort_comparison, [
+            "feature_id", "causal_role", "bad_mean_abs_shap", "good_mean_abs_shap",
+            "abs_shap_gap_bad_minus_good", "signed_shap_separation_z",
+            "bad_shap_share_pct", "good_shap_share_pct",
+        ])
+        cmp_top = cohort_comparison.head(top_n).loc[:, cmp_cols]
+        lines.extend([
+            "## Good vs Bad SHAP cohort comparison",
+            "",
+            "Model-interpretation view from `all_wafer_shap_value.csv`: features the model "
+            "attributes to MORE on bad wafers than on good wafers (positive gap).",
+            "",
+            _to_markdown(cmp_top),
+            "",
+        ])
+
+    lines.extend([
         "## Causal Hypothesis Cards",
         "",
-    ]
+    ])
     if cards.empty:
         lines.append("No causal hypothesis cards were generated.")
     else:

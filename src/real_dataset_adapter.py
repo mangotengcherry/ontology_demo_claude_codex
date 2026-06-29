@@ -8,14 +8,15 @@ from typing import Dict, Iterable, List
 import numpy as np
 import pandas as pd
 
+from src import shap_inputs
 from src.causal_evidence import measure_edges
 
 TARGET_ID = "defect_rate"
 COHORT_ID = "__BAD_WAFER_COHORT__"
 RAW_DATA_FILE = "raw_data.csv"
-SHAP_FILE = "x_feature_shap_value.csv"
 RELATION_FILE = "prc_metro_relation.csv"
 BAD_WAFERS_FILE = "bad_wafers.csv"
+BAD_WAFERS_FILES = ("bad_wafers.csv", "bad_wafer_list.csv")   # accepted filenames (alias)
 ID_COLUMNS = ["root_lot_id", "wafer_id"]
 RAW_NON_FEATURE_COLUMNS = {"root_lot_id", "wafer_id", "tkout_time", "target"}
 
@@ -29,39 +30,64 @@ class StandardDatasetArtifacts:
     causal_edges: pd.DataFrame
     mediation: pd.DataFrame
     process_history: pd.DataFrame
-    engineer_feedback: pd.DataFrame
     ground_truth: pd.DataFrame
+    shap_cohort_comparison: pd.DataFrame | None = None
 
 
 def build_standard_dataset(
     input_dir: str = "input",
     output_dir: str = "data",
-    bad_quantile: float = 0.80,
+    bad_quantile: float | None = None,
+    require_shap: bool = True,
 ) -> StandardDatasetArtifacts:
-    """Build standard project CSVs from the real dataset contract in dataset_info.md.
+    """Build standard project CSVs from the real dataset contract.
 
-    `x_feature_shap_value.csv` is interpreted as bad-wafer cohort mean SHAP, not
-    per-wafer SHAP. The resulting `shap_values.csv` therefore contains one row per
-    feature with `shap_scope = bad_wafer_mean`.
+    Bad-wafer labelling prefers the explicit cohort list: when
+    `bad_wafers.csv` (or `bad_wafer_list.csv`) is present it defines `bad_flag`
+    and `bad_quantile` is ignored. `bad_quantile` (a target quantile in 0..1) is
+    only a fallback used when no list is provided; if neither is available a
+    clear error is raised rather than silently picking a threshold.
+
+    The SHAP input is interpreted as bad-wafer cohort mean SHAP, not raw per-wafer
+    SHAP. The resulting `shap_values.csv` therefore contains one row per feature
+    with `shap_scope = bad_wafer_mean`. The SHAP source can be either the new wide
+    per-wafer exports (`bad_wafer_shap_value.csv` / `all_wafer_shap_value.csv`) or
+    the legacy long table (`x_feature_shap_value.csv`); see `src.shap_inputs`.
+    When `all_wafer_shap_value.csv` is present a good-vs-bad cohort comparison
+    (`shap_cohort_comparison.csv`) is also produced.
+
+    Set `require_shap=False` to build the ontology artifacts (feature dictionary,
+    causal edges, measured mediation) from `raw_data` + `prc_metro_relation` alone
+    when no SHAP input is supplied -- used by the "train CatBoost in-notebook"
+    flow, which produces its own SHAP and does not need the provided one.
     """
     raw = _read_required_csv(input_dir, RAW_DATA_FILE)
-    shap_input = _read_required_csv(input_dir, SHAP_FILE)
     relation = _read_required_csv(input_dir, RELATION_FILE)
     _validate_raw(raw)
-    _validate_shap(shap_input)
     relation = _normalize_relation(relation)
 
     feature_cols = [c for c in raw.columns if c not in RAW_NON_FEATURE_COLUMNS]
     feature_matrix = raw[ID_COLUMNS + feature_cols].copy()
     bad_wafers = _read_optional_bad_wafers(input_dir)
     target = _build_target(raw, bad_quantile, bad_wafers=bad_wafers)
-    feature_ids = _ordered_union(feature_cols, shap_input["feature"].astype(str).tolist())
+
+    bad_keys = set(shap_inputs.combined_key(target["root_lot_id"], target["wafer_id"])[target["bad_flag"] == 1])
+    try:
+        cohort_shap, comparison, _ = shap_inputs.resolve_cohort_mean(
+            input_dir, feature_cols, bad_keys, read_csv=lambda name: _read_optional_csv(input_dir, name)
+        )
+    except FileNotFoundError:
+        if require_shap:
+            raise
+        cohort_shap, comparison = _empty_cohort_shap(), None
+
+    feature_ids = _ordered_union(feature_cols, cohort_shap["feature"].astype(str).tolist())
     feature_dictionary = _build_feature_dictionary(feature_ids, relation)
-    shap_values = _build_feature_level_shap(shap_input, raw, target)
+    shap_values = _build_feature_level_shap(cohort_shap, raw, target)
+    comparison = _annotate_comparison(comparison, feature_dictionary)
     mediation = measure_edges(feature_matrix, target, feature_dictionary)
     causal_edges = _build_causal_edges(feature_dictionary, relation, mediation)
     process_history = _build_process_history(raw)
-    engineer_feedback = _empty_engineer_feedback()
     ground_truth = _unknown_ground_truth()
 
     artifacts = StandardDatasetArtifacts(
@@ -72,8 +98,8 @@ def build_standard_dataset(
         causal_edges=causal_edges,
         mediation=mediation,
         process_history=process_history,
-        engineer_feedback=engineer_feedback,
         ground_truth=ground_truth,
+        shap_cohort_comparison=comparison,
     )
     write_standard_dataset(artifacts, output_dir)
     return artifacts
@@ -86,14 +112,20 @@ def write_standard_dataset(artifacts: StandardDatasetArtifacts, output_dir: str 
     artifacts.shap_values.to_csv(os.path.join(output_dir, "shap_values.csv"), index=False)
     artifacts.feature_dictionary.to_csv(os.path.join(output_dir, "feature_dictionary.csv"), index=False)
     artifacts.process_history.to_csv(os.path.join(output_dir, "process_history.csv"), index=False)
-    artifacts.engineer_feedback.to_csv(os.path.join(output_dir, "engineer_feedback.csv"), index=False)
     artifacts.ground_truth.to_csv(os.path.join(output_dir, "ground_truth.csv"), index=False)
     artifacts.mediation.to_csv(os.path.join(output_dir, "mediation.csv"), index=False)
     _write_causal_edges(artifacts.causal_edges, os.path.join(output_dir, "causal_edges.csv"))
+    if artifacts.shap_cohort_comparison is not None and not artifacts.shap_cohort_comparison.empty:
+        artifacts.shap_cohort_comparison.to_csv(
+            os.path.join(output_dir, "shap_cohort_comparison.csv"), index=False
+        )
 
 
 def input_files_exist(input_dir: str = "input") -> bool:
-    return all(os.path.exists(os.path.join(input_dir, name)) for name in [RAW_DATA_FILE, SHAP_FILE, RELATION_FILE])
+    """True when the real-data contract is satisfiable: raw + relation + any SHAP input."""
+    has_core = all(os.path.exists(os.path.join(input_dir, name)) for name in [RAW_DATA_FILE, RELATION_FILE])
+    has_shap = shap_inputs.shap_input_exists(lambda name: os.path.exists(os.path.join(input_dir, name)))
+    return has_core and has_shap
 
 
 def _read_required_csv(input_dir: str, filename: str) -> pd.DataFrame:
@@ -103,16 +135,25 @@ def _read_required_csv(input_dir: str, filename: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _read_optional_csv(input_dir: str, filename: str) -> pd.DataFrame | None:
+    path = os.path.join(input_dir, filename)
+    return pd.read_csv(path) if os.path.exists(path) else None
+
+
 def _validate_raw(raw: pd.DataFrame) -> None:
     missing = [c for c in ["root_lot_id", "wafer_id", "target"] if c not in raw.columns]
     if missing:
         raise ValueError(f"{RAW_DATA_FILE} is missing required columns: {missing}")
 
 
-def _validate_shap(shap_input: pd.DataFrame) -> None:
-    missing = [c for c in ["feature", "shap_value"] if c not in shap_input.columns]
-    if missing:
-        raise ValueError(f"{SHAP_FILE} is missing required columns: {missing}")
+def _annotate_comparison(comparison: pd.DataFrame | None, feature_dictionary: pd.DataFrame) -> pd.DataFrame | None:
+    """Join causal_role / process_step onto the good-vs-bad SHAP comparison."""
+    if comparison is None or comparison.empty:
+        return comparison
+    meta = feature_dictionary.set_index("feature_id")[["causal_role", "process_step", "mechanism_group"]]
+    out = comparison.merge(meta, how="left", left_on="feature_id", right_index=True)
+    out["causal_role"] = out["causal_role"].fillna("unknown")
+    return out
 
 
 def _normalize_relation(relation: pd.DataFrame) -> pd.DataFrame:
@@ -127,13 +168,21 @@ def _normalize_relation(relation: pd.DataFrame) -> pd.DataFrame:
 
 
 def _read_optional_bad_wafers(input_dir: str) -> pd.DataFrame | None:
-    path = os.path.join(input_dir, BAD_WAFERS_FILE)
-    if not os.path.exists(path):
-        return None
-    return pd.read_csv(path)
+    for name in BAD_WAFERS_FILES:
+        path = os.path.join(input_dir, name)
+        if os.path.exists(path):
+            return pd.read_csv(path)
+    return None
 
 
-def _build_target(raw: pd.DataFrame, bad_quantile: float, bad_wafers: pd.DataFrame | None = None) -> pd.DataFrame:
+def _build_target(
+    raw: pd.DataFrame, bad_quantile: float | None = None, bad_wafers: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Label bad wafers: explicit cohort list first, target quantile only as fallback.
+
+    Priority: `bad_wafers` list (quantile ignored) > `bad_quantile` threshold. When
+    neither is supplied, raise -- never silently pick a threshold.
+    """
     target = raw[["root_lot_id", "wafer_id", "target"]].copy()
     target = target.rename(columns={"target": TARGET_ID})
     y = pd.to_numeric(target[TARGET_ID], errors="coerce")
@@ -149,9 +198,14 @@ def _build_target(raw: pd.DataFrame, bad_quantile: float, bad_wafers: pd.DataFra
                 f"{BAD_WAFERS_FILE} contains wafer IDs not present in raw_data.csv: {sample}"
             )
         target["bad_flag"] = raw_keys.isin(bad_keys).astype(int)
-    else:
+    elif bad_quantile is not None:
         threshold = y.quantile(bad_quantile)
         target["bad_flag"] = (y >= threshold).astype(int)
+    else:
+        raise ValueError(
+            "bad wafer 판정 기준이 없습니다. input/bad_wafers.csv(또는 bad_wafer_list.csv) 를 제공하거나 "
+            "bad_quantile(0~1) 값을 지정하세요."
+        )
     return target
 
 
@@ -304,12 +358,44 @@ def _feature_metadata(feature_id: str, relation_lookup: Dict[tuple, dict]) -> di
     return base
 
 
+SHAP_VALUE_COLUMNS = [
+    "root_lot_id", "wafer_id", "target_id", "feature_id", "feature_value",
+    "shap_value", "abs_shap_value", "shap_direction", "shap_scope",
+    "bad_mean_feature_value", "overall_mean_feature_value",
+    "bad_recurrence", "bad_good_separation_simple",
+]
+
+
+def _empty_cohort_shap() -> pd.DataFrame:
+    return pd.DataFrame(columns=["feature", "shap_value", "mean_abs_shap", "n_wafers"])
+
+
+def build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, target: pd.DataFrame) -> pd.DataFrame:
+    """Public: build the standard bad-wafer cohort-mean SHAP table from a cohort frame.
+
+    Used both by the adapter (provided-SHAP path) and by the train-in-notebook flow,
+    which produces its own cohort SHAP (feature, shap_value, mean_abs_shap) from a
+    trained model and feeds it through the identical ontology-SHAP analysis.
+    """
+    return _build_feature_level_shap(shap_input, raw, target)
+
+
 def _build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, target: pd.DataFrame) -> pd.DataFrame:
+    """Build the standard bad-wafer cohort-mean SHAP table.
+
+    `shap_input` carries one row per feature with a signed cohort-mean `shap_value`.
+    When it also carries `mean_abs_shap` (from the wide per-wafer exports) that is
+    used as the importance magnitude, so a bidirectional feature whose signed mean
+    cancels out is not under-ranked. Legacy long input has no such column, so the
+    magnitude falls back to |signed mean|.
+    """
     bad_wafers = set(target.loc[target["bad_flag"] == 1, "wafer_id"])
+    has_mean_abs = "mean_abs_shap" in shap_input.columns
     rows: List[dict] = []
     for _, row in shap_input.iterrows():
         feature_id = str(row["feature"])
         shap_value = float(row["shap_value"])
+        abs_shap = float(row["mean_abs_shap"]) if has_mean_abs and pd.notna(row["mean_abs_shap"]) else abs(shap_value)
         stats = _feature_value_stats(raw, bad_wafers, feature_id)
         rows.append(
             {
@@ -319,7 +405,7 @@ def _build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, targe
                 "feature_id": feature_id,
                 "feature_value": stats["feature_value"],
                 "shap_value": round(shap_value, 6),
-                "abs_shap_value": round(abs(shap_value), 6),
+                "abs_shap_value": round(abs_shap, 6),
                 "shap_direction": "+" if shap_value >= 0 else "-",
                 "shap_scope": "bad_wafer_mean",
                 "bad_mean_feature_value": stats["bad_mean"],
@@ -328,7 +414,7 @@ def _build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, targe
                 "bad_good_separation_simple": stats["bad_good_separation"],
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=SHAP_VALUE_COLUMNS)
 
 
 def _feature_value_stats(raw: pd.DataFrame, bad_wafers: set, feature_id: str) -> dict:
@@ -495,12 +581,6 @@ def _row_value(row: pd.Series, column: str) -> str:
     if column not in row.index or pd.isna(row[column]):
         return ""
     return str(row[column])
-
-
-def _empty_engineer_feedback() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=["hypothesis_id", "engineer_judgment", "action_type", "action_status", "outcome", "note"]
-    )
 
 
 def _unknown_ground_truth() -> pd.DataFrame:

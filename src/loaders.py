@@ -14,7 +14,6 @@ REQUIRED_COLUMNS: Dict[str, list] = {
     "feature_dictionary": ["feature_id", "causal_role", "leakage_risk", "mechanism_group"],
     "causal_edges": ["source_feature", "target_feature", "relation", "confidence"],
     "process_history": ["wafer_id", "process_step", "chamber_id", "ppid"],
-    "engineer_feedback": ["hypothesis_id", "engineer_judgment", "action_status"],
     "ground_truth": ["true_root_feature", "true_chain_text", "true_chamber"],
 }
 
@@ -44,4 +43,9 @@ def load_all_data(data_dir: str = "data") -> Dict[str, pd.DataFrame]:
     med_path = os.path.join(data_dir, "mediation.csv")
     if os.path.exists(med_path):
         data["mediation"] = pd.read_csv(med_path)
+
+    # Optional good-vs-bad SHAP cohort comparison (from all_wafer_shap_value.csv).
+    cmp_path = os.path.join(data_dir, "shap_cohort_comparison.csv")
+    if os.path.exists(cmp_path):
+        data["shap_cohort_comparison"] = pd.read_csv(cmp_path)
     return data
