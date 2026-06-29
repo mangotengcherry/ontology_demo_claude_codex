@@ -92,4 +92,7 @@ SHAP은 인과를 증명하지 않습니다. 이 프로젝트는 SHAP ranking을
 
 성능 arm(flat vs ontology CatBoost)의 정직한 win/non-win 해석은 [docs/model_comparison_findings.md](docs/model_comparison_findings.md)에 정리되어 있습니다.
 
-팀원이 가이드를 따라 평가를 실행하고 결과를 확인하려면 [notebooks/evaluation_guide.ipynb](notebooks/evaluation_guide.ipynb)를 사용하세요.
+팀원이 가이드를 따라 평가를 실행하고 결과를 확인하려면 [notebooks/evaluation_guide.ipynb](notebooks/evaluation_guide.ipynb)를 사용하세요. 노트북 상단의 `MODE` 로 두 흐름을 선택합니다.
+
+- **MODE 1** — 실데이터 → 온톨로지 → CatBoost 학습 → SHAP·ontology SHAP → 해석 (제공 SHAP 불필요)
+- **MODE 2** — 실데이터 → 온톨로지 → 제공된 SHAP → ontology SHAP → 해석 (학습 없음)

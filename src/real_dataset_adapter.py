@@ -41,6 +41,7 @@ def build_standard_dataset(
     input_dir: str = "input",
     output_dir: str = "data",
     bad_quantile: float = 0.80,
+    require_shap: bool = True,
 ) -> StandardDatasetArtifacts:
     """Build standard project CSVs from the real dataset contract.
 
@@ -51,6 +52,11 @@ def build_standard_dataset(
     the legacy long table (`x_feature_shap_value.csv`); see `src.shap_inputs`.
     When `all_wafer_shap_value.csv` is present a good-vs-bad cohort comparison
     (`shap_cohort_comparison.csv`) is also produced.
+
+    Set `require_shap=False` to build the ontology artifacts (feature dictionary,
+    causal edges, measured mediation) from `raw_data` + `prc_metro_relation` alone
+    when no SHAP input is supplied -- used by the "train CatBoost in-notebook"
+    flow, which produces its own SHAP and does not need the provided one.
     """
     raw = _read_required_csv(input_dir, RAW_DATA_FILE)
     relation = _read_required_csv(input_dir, RELATION_FILE)
@@ -63,9 +69,14 @@ def build_standard_dataset(
     target = _build_target(raw, bad_quantile, bad_wafers=bad_wafers)
 
     bad_keys = set(shap_inputs.combined_key(target["root_lot_id"], target["wafer_id"])[target["bad_flag"] == 1])
-    cohort_shap, comparison, shap_source = shap_inputs.resolve_cohort_mean(
-        input_dir, feature_cols, bad_keys, read_csv=lambda name: _read_optional_csv(input_dir, name)
-    )
+    try:
+        cohort_shap, comparison, shap_source = shap_inputs.resolve_cohort_mean(
+            input_dir, feature_cols, bad_keys, read_csv=lambda name: _read_optional_csv(input_dir, name)
+        )
+    except FileNotFoundError:
+        if require_shap:
+            raise
+        cohort_shap, comparison, shap_source = _empty_cohort_shap(), None, "none"
 
     feature_ids = _ordered_union(feature_cols, cohort_shap["feature"].astype(str).tolist())
     feature_dictionary = _build_feature_dictionary(feature_ids, relation)
@@ -334,6 +345,28 @@ def _feature_metadata(feature_id: str, relation_lookup: Dict[tuple, dict]) -> di
     return base
 
 
+SHAP_VALUE_COLUMNS = [
+    "root_lot_id", "wafer_id", "target_id", "feature_id", "feature_value",
+    "shap_value", "abs_shap_value", "shap_direction", "shap_scope",
+    "bad_mean_feature_value", "overall_mean_feature_value",
+    "bad_recurrence", "bad_good_separation_simple",
+]
+
+
+def _empty_cohort_shap() -> pd.DataFrame:
+    return pd.DataFrame(columns=["feature", "shap_value", "mean_abs_shap", "n_wafers"])
+
+
+def build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, target: pd.DataFrame) -> pd.DataFrame:
+    """Public: build the standard bad-wafer cohort-mean SHAP table from a cohort frame.
+
+    Used both by the adapter (provided-SHAP path) and by the train-in-notebook flow,
+    which produces its own cohort SHAP (feature, shap_value, mean_abs_shap) from a
+    trained model and feeds it through the identical ontology-SHAP analysis.
+    """
+    return _build_feature_level_shap(shap_input, raw, target)
+
+
 def _build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, target: pd.DataFrame) -> pd.DataFrame:
     """Build the standard bad-wafer cohort-mean SHAP table.
 
@@ -368,7 +401,7 @@ def _build_feature_level_shap(shap_input: pd.DataFrame, raw: pd.DataFrame, targe
                 "bad_good_separation_simple": stats["bad_good_separation"],
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=SHAP_VALUE_COLUMNS)
 
 
 def _feature_value_stats(raw: pd.DataFrame, bad_wafers: set, feature_id: str) -> dict:

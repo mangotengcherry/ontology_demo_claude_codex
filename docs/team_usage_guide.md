@@ -52,7 +52,11 @@ data/mediation.csv                     # 측정된 매개효과 원본 (a, b, in
 jupyter notebook notebooks/evaluation_guide.ipynb
 ```
 
-> 평가 실행 + 결과 확인 + 성능 비교 + 모델 해석을 한 노트북에서 위에서부터 실행하면 됩니다.
+> 노트북 상단 설정 셀에서 **MODE** 를 고른 뒤 `Restart & Run All` 합니다. 두 흐름은 *CatBoost 학습 단계* 만 다릅니다.
+> - **MODE 1**: 실데이터 → 온톨로지 → **CatBoost 학습** → SHAP·ontology SHAP → 해석 (제공 SHAP 불필요)
+> - **MODE 2**: 실데이터 → 온톨로지 → **제공된 SHAP** → ontology SHAP → 해석 (학습 없음)
+>
+> 실데이터 평가 시 `USE_VIRTUAL_DEMO_DATA=False` 로 두고 `input/` 에 계약 파일을 넣으세요.
 > 형식만 먼저 보고 싶으면 데이터 없이 `python3 run_demo.py --mode virtual` 로 가상 데이터를 생성·분석해 산출물 형식을 확인할 수 있습니다.
 
 ### 0-6. 성능 arm — flat vs ontology CatBoost (선택)
